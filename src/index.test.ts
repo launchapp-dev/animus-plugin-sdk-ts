@@ -312,6 +312,98 @@ describe('definePlugin', () => {
     expect((frames[2]?.result as { status: string }).status).toBe('healthy');
   });
 
+  it('dispatches canonical subject/list and subject/schema routes', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const captured: string[] = [];
+    output.on('data', (c: Buffer) => captured.push(c.toString('utf8')));
+
+    const handle = definePlugin({
+      kind: PluginKind.SubjectBackend,
+      name: 'animus-subject-sample',
+      version: '0.1.0',
+      description: 'sample',
+      subject_kinds: ['task'],
+      impl: sampleBackend,
+      input: input as unknown as NodeJS.ReadableStream,
+      output: output as unknown as NodeJS.WritableStream,
+      skipCliArgs: true,
+    });
+
+    const done = handle.run();
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'subject/list', params: { filter: { limit: 5 } } })}\n`);
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'subject/schema' })}\n`);
+    input.end();
+    await done;
+
+    const frames = captured
+      .join('')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as RpcResponse);
+
+    expect(frames).toHaveLength(2);
+    expect((frames[0]?.result as { subjects: unknown[] }).subjects).toHaveLength(1);
+    expect((frames[1]?.result as { kinds: string[] }).kinds).toEqual(['task']);
+  });
+
+  it('dispatches trigger/watch as trigger/event notifications', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const captured: string[] = [];
+    output.on('data', (c: Buffer) => captured.push(c.toString('utf8')));
+
+    async function* events() {
+      yield {
+        id: 'evt-1',
+        occurred_at: NOW,
+        kind: 'sample.tick',
+        payload: { ok: true },
+        subject_id: null,
+        action_hint: null,
+      };
+    }
+
+    const handle = definePlugin({
+      kind: PluginKind.TriggerBackend,
+      name: 'animus-trigger-sample',
+      version: '0.1.0',
+      description: 'sample',
+      impl: {
+        schema: () => ({
+          kinds: ['sample.tick'],
+          supports_resume: false,
+          supports_dedup: true,
+          supports_ack: false,
+        }),
+        watch: () => events(),
+      },
+      input: input as unknown as NodeJS.ReadableStream,
+      output: output as unknown as NodeJS.WritableStream,
+      skipCliArgs: true,
+    });
+
+    const done = handle.run();
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'trigger/schema' })}\n`);
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'trigger/watch' })}\n`);
+    input.end();
+    await done;
+
+    const frames = captured
+      .join('')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as RpcResponse & { method?: string; params?: Record<string, unknown> });
+
+    const schemaResponse = frames.find((frame) => frame.id === 1);
+    const watchResponse = frames.find((frame) => frame.id === 2);
+    expect((schemaResponse?.result as { kinds: string[] }).kinds).toEqual(['sample.tick']);
+    expect((watchResponse?.result as { watching: boolean }).watching).toBe(true);
+    const notification = frames.find((frame) => frame.method === 'trigger/event');
+    expect(notification?.params?.id).toBe(2);
+    expect((notification?.params?.event as { kind: string }).kind).toBe('sample.tick');
+  });
+
   it('rejects subject calls for unknown kinds', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

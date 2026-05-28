@@ -1,11 +1,14 @@
 // Role-shaped TypeScript interfaces. Each role is the contract a plugin author
 // implements; the SDK wires the methods to JSON-RPC handlers.
 //
-// MVP scope (this skeleton):
-//   - SubjectBackend: fully wired in `definePlugin` (list/get/create/update/next/status).
-//   - Provider / TriggerBackend / TransportBackend / LogStorageBackend: signatures
-//     are defined here so authors get IntelliSense, but the dispatcher will
-//     respond with `MethodNotFound` until later waves flesh out the wiring.
+// MVP scope:
+//   - SubjectBackend: wired for the current canonical `subject/*` protocol
+//     methods and the older kind-prefixed compatibility routes.
+//   - TriggerBackend: wired for `trigger/schema`, `trigger/watch`, and
+//     optional `trigger/ack`.
+//   - Provider / TransportBackend / LogStorageBackend: signatures are defined
+//     here so authors get IntelliSense, but the dispatcher will respond with
+//     `MethodNotFound` until later waves flesh out the wiring.
 //
 // All payload shapes use `unknown` for now; T2 will swap them for generated
 // types from the JSON Schemas under `schemas/animus-subject-protocol/`.
@@ -57,6 +60,9 @@ export interface Subject {
   assignee?: string;
   labels?: string[];
   url?: string;
+  native_status?: string;
+  status_metadata?: unknown;
+  attachments?: unknown[];
   /** Implementation-defined custom fields. */
   custom?: Record<string, unknown>;
 }
@@ -154,6 +160,11 @@ export interface SubjectBackend {
   status?(params: { id: string; status: SubjectStatus }, ctx: SubjectCallContext): Promise<Subject> | Subject;
   next?(params: Record<string, never>, ctx: SubjectCallContext): Promise<Subject | null> | Subject | null;
   /**
+   * Optional `subject/schema` payload. When omitted, the SDK derives a small
+   * schema from `subject_kinds`.
+   */
+  schema?(ctx: CallContext): Promise<Record<string, unknown>> | Record<string, unknown>;
+  /**
    * Optional health probe. When set, `health/check` returns whatever this
    * function reports instead of the default `healthy`. Use for upstream
    * service checks, required env-var validation, etc.
@@ -191,15 +202,33 @@ export interface Provider {
 // ---- trigger_backend -------------------------------------------------------
 
 export interface TriggerEvent {
-  trigger_id: string;
-  event_id: string;
+  /** Stable event id, e.g. `github:webhook/<delivery-id>`. */
+  id: string;
+  /** ISO-8601 event timestamp. */
+  occurred_at: string;
+  /** Event kind workflows match on, e.g. `discord.mention`. */
+  kind: string;
+  /** Trigger-specific JSON payload. */
   payload: unknown;
+  /** Optional subject id this event maps to. */
+  subject_id?: string | null;
+  /** Optional advisory action hint for workflow routing. */
+  action_hint?: string | null;
+}
+
+export interface TriggerSchema {
+  kinds: string[];
+  supports_resume: boolean;
+  supports_dedup: boolean;
+  supports_ack: boolean;
 }
 
 export interface TriggerBackend {
-  /** Long-running: emit events to the host via `notify("trigger/event", ...)`. */
-  watch(params: { trigger_id: string; config: unknown }, ctx: CallContext): Promise<void>;
-  ack?(params: { trigger_id: string; event_id: string }, ctx: CallContext): Promise<void>;
+  /** Long-running event source consumed by the SDK and sent as `trigger/event` notifications. */
+  watch(params: Record<string, unknown>, ctx: CallContext): AsyncIterable<TriggerEvent> | Promise<AsyncIterable<TriggerEvent>>;
+  ack?(params: { event_id: string }, ctx: CallContext): Promise<void> | void;
+  schema?(ctx: CallContext): Promise<TriggerSchema> | TriggerSchema;
+  health?(ctx: CallContext): Promise<HealthReport> | HealthReport;
 }
 
 // ---- transport_backend -----------------------------------------------------

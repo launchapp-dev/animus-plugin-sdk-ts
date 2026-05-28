@@ -2,7 +2,7 @@
 
 TypeScript SDK for authoring [Animus](https://github.com/launchapp-dev/animus-cli) plugins. Ship a `subject_backend`, `provider`, `trigger_backend`, `transport_backend`, or `log_storage_backend` plugin in TypeScript without reading the Rust source.
 
-> Status: **0.1.0 skeleton.** Subject-backend role is fully wired. Other roles throw at `definePlugin` — see [Roles](#roles).
+> Status: **0.1.x.** Subject-backend and trigger-backend roles are wired. Other roles throw at `definePlugin` — see [Roles](#roles).
 
 This repo is the canonical home of the TypeScript plugin SDK, extracted from
 [`launchapp-dev/animus-cli`](https://github.com/launchapp-dev/animus-cli) at
@@ -90,11 +90,11 @@ Stdout is reserved for protocol frames. The SDK writes diagnostics to stderr; yo
 
 ## Roles
 
-| Kind                    | Supported in 0.1.0 | Notes                                                            |
+| Kind                    | Supported in 0.1.x | Notes                                                            |
 | ----------------------- | ------------------ | ---------------------------------------------------------------- |
-| `subject_backend`       | Yes                | MVP target — fully usable.                                       |
+| `subject_backend`       | Yes                | Supports canonical `subject/*` methods plus legacy `<kind>/*` routes. |
 | `provider`              | No (throws)        | `definePlugin({kind: 'provider', ...})` throws — `agent/run` dispatch isn't wired yet and the host would route real agent calls to a plugin that can't answer. Use the Rust SDK in the meantime. Coming in a later wave. |
-| `trigger_backend`       | No (throws)        | Same — `definePlugin` throws until `trigger/watch` is wired.     |
+| `trigger_backend`       | Yes                | Supports `trigger/schema`, `trigger/watch`, optional `trigger/ack`, and `trigger/event` notifications. |
 | `transport_backend`     | No (throws)        | Same.                                                            |
 | `log_storage_backend`   | No (throws)        | Same.                                                            |
 

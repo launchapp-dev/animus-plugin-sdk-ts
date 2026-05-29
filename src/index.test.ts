@@ -355,12 +355,12 @@ describe('definePlugin', () => {
 
     async function* events() {
       yield {
-        id: 'evt-1',
-        occurred_at: NOW,
-        kind: 'sample.tick',
-        payload: { ok: true },
+        event_id: 'evt-1',
+        trigger_id: 'sample-trigger',
         subject_id: null,
+        subject_kind: null,
         action_hint: null,
+        payload: { kind: 'sample.tick', occurred_at: NOW, ok: true },
       };
     }
 
@@ -400,8 +400,10 @@ describe('definePlugin', () => {
     expect((schemaResponse?.result as { kinds: string[] }).kinds).toEqual(['sample.tick']);
     expect((watchResponse?.result as { watching: boolean }).watching).toBe(true);
     const notification = frames.find((frame) => frame.method === 'trigger/event');
-    expect(notification?.params?.id).toBe(2);
-    expect((notification?.params?.event as { kind: string }).kind).toBe('sample.tick');
+    expect(notification?.params?.event_id).toBe('evt-1');
+    expect(notification?.params?.trigger_id).toBe('sample-trigger');
+    expect((notification?.params?.payload as { kind: string }).kind).toBe('sample.tick');
+    expect((notification?.params as Record<string, unknown>).event).toBeUndefined();
   });
 
   it('rejects subject calls for unknown kinds', async () => {

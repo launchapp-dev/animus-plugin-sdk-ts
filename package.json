@@ -1,6 +1,6 @@
 {
   "name": "@launchapp-dev/animus-plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for authoring Animus plugins (subject backends, providers, triggers, transports, log storage).",
   "license": "Elastic-2.0",
   "type": "module",

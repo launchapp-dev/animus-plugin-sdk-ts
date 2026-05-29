@@ -241,10 +241,12 @@ function defaultTriggerSchema(impl: TriggerBackend): TriggerSchema {
 
 function ensureWireTriggerEvent(event: TriggerEvent): TriggerEvent {
   return {
+    trigger_id: null,
     subject_id: null,
+    subject_kind: null,
     action_hint: null,
+    payload: null,
     ...event,
-    occurred_at: event.occurred_at ?? new Date().toISOString(),
   };
 }
 
@@ -608,14 +610,10 @@ async function dispatchRole(
           void (async () => {
             try {
               for await (const event of stream) {
-                await wire.notify('trigger/event', {
-                  id,
-                  event: ensureWireTriggerEvent(event),
-                });
+                await wire.notify('trigger/event', ensureWireTriggerEvent(event));
               }
             } catch (err) {
               await wire.notify('trigger/event', {
-                id,
                 error: {
                   code: ErrorCode.InternalError,
                   message: `trigger stream error: ${String(err)}`,

@@ -98,7 +98,7 @@ Stdout is reserved for protocol frames. The SDK writes diagnostics to stderr; yo
 | `transport_backend`     | No (throws)        | Same.                                                            |
 | `log_storage_backend`   | No (throws)        | Same.                                                            |
 
-The role-shape TypeScript interfaces (`Provider`, `TriggerBackend`, `TransportBackend`, `LogStorageBackend`) are still exported so authors can pre-write impls against the contract — `definePlugin` will accept them once the host dispatch is wired in a later wave.
+The role-shape TypeScript interfaces (`Provider`, `TransportBackend`, `LogStorageBackend`) are still exported so authors can pre-write impls against the contract — `definePlugin` will accept them once the host dispatch is wired in a later wave.
 
 ## Scripts
 

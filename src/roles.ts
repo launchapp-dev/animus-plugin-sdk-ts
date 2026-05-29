@@ -202,18 +202,18 @@ export interface Provider {
 // ---- trigger_backend -------------------------------------------------------
 
 export interface TriggerEvent {
-  /** Stable event id, e.g. `github:webhook/<delivery-id>`. */
-  id: string;
-  /** ISO-8601 event timestamp. */
-  occurred_at: string;
-  /** Event kind workflows match on, e.g. `discord.mention`. */
-  kind: string;
-  /** Trigger-specific JSON payload. */
-  payload: unknown;
+  /** Stable event id, used for deduplication and `trigger/ack`. */
+  event_id: string;
+  /** Logical workflow trigger id supplied by `trigger/watch`. */
+  trigger_id?: string | null;
   /** Optional subject id this event maps to. */
   subject_id?: string | null;
+  /** Optional subject kind for `subject_id`, e.g. `"issue"` or `"task"`. */
+  subject_kind?: string | null;
   /** Optional advisory action hint for workflow routing. */
   action_hint?: string | null;
+  /** Trigger-specific JSON payload forwarded to the workflow. */
+  payload?: unknown;
 }
 
 export interface TriggerSchema {

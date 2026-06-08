@@ -1,182 +1,46 @@
-// Role-shaped TypeScript interfaces. Each role is the contract a plugin author
-// implements; the SDK wires the methods to JSON-RPC handlers.
-//
-// MVP scope:
-//   - SubjectBackend: wired for the current canonical `subject/*` protocol
-//     methods and the older kind-prefixed compatibility routes.
-//   - TriggerBackend: wired for `trigger/schema`, `trigger/watch`, and
-//     optional `trigger/ack`.
-//   - Provider / TransportBackend / LogStorageBackend: signatures are defined
-//     here so authors get IntelliSense, but the dispatcher will respond with
-//     `MethodNotFound` until later waves flesh out the wiring.
-//
-// All payload shapes use `unknown` for now; T2 will swap them for generated
-// types from the JSON Schemas under `schemas/animus-subject-protocol/`.
+// Back-compat barrel for role contracts. The contracts now live one-per-file
+// under `./roles/` and are also published as subpath exports
+// (`@launchapp-dev/animus-plugin-sdk/<role>`). This module re-exports them so
+// the historical `import { SubjectBackend } from '.../roles.js'` path and the
+// `.` entrypoint keep working unchanged.
 
-/** Generic context passed to every role method (extensible). */
-export interface CallContext {
-  /** Original JSON-RPC request id (for logging / cancellation). */
-  request_id: string | number | null;
-  /** AbortSignal that fires when the host sends `$/cancelRequest`. */
-  signal?: AbortSignal;
-}
+export type { CallContext, HealthReport } from './roles/context.js';
 
-// ---- subject_backend -------------------------------------------------------
+// subject_backend
+export type {
+  Subject,
+  SubjectStatus,
+  SubjectListParams,
+  SubjectListResult,
+  SubjectCallContext,
+  SubjectCreateRequest,
+  SubjectPatch,
+  SubjectBackend,
+} from './roles/subject.js';
 
-/**
- * Normalized subject status (mirrors Rust `SubjectStatus`, kebab-case wire form).
- * Backends should translate from their native status via workflow YAML
- * `status_map`.
- */
-export type SubjectStatus = 'ready' | 'in-progress' | 'blocked' | 'done' | 'cancelled';
+// trigger_backend
+export type { TriggerEvent, TriggerSchema, TriggerBackend } from './roles/trigger.js';
 
-/**
- * A single subject record returned by a subject backend.
- *
- * Wire-required fields (per `crates/animus-subject-protocol::Subject`):
- *   - id, kind, title, status, created_at, updated_at
- *
- * `created_at` / `updated_at` must be ISO-8601 timestamps. The SDK will
- * auto-fill missing `status`/`created_at`/`updated_at` on list results to
- * keep the hello-world demo usable, but production backends should set them
- * explicitly. T2 will replace this with the generated wire type.
- */
-export interface Subject {
-  /** Stable id, e.g. `"task:TASK-123"` or `"req:REQ-9"`. */
-  id: string;
-  /** Subject kind (e.g. `"task"`, `"requirement"`). */
-  kind: string;
-  /** Human-readable title. */
-  title: string;
-  /** Normalized status. */
-  status: SubjectStatus;
-  /** ISO-8601 creation timestamp. */
-  created_at: string;
-  /** ISO-8601 last-update timestamp. */
-  updated_at: string;
-  /** Optional free-form fields. */
-  description?: string;
-  priority?: number;
-  assignee?: string;
-  labels?: string[];
-  url?: string;
-  native_status?: string;
-  status_metadata?: unknown;
-  attachments?: unknown[];
-  /** Implementation-defined custom fields. */
-  custom?: Record<string, unknown>;
-}
+// provider
+export type { Provider, ProviderCallContext, AgentStream, AgentRunRequest, AgentRunResponse } from './roles/provider.js';
 
-/**
- * Params for `<kind>/list` — matches Rust `SubjectFilter` (top-level fields,
- * not nested under `filter`). All fields are optional and combined with AND
- * semantics. The SDK pre-fills `kind: [ctx.kind]` if the host sends no kind
- * filter, so authors can ignore the param entirely for single-kind backends.
- */
-export interface SubjectListParams {
-  status?: SubjectStatus[];
-  kind?: string[];
-  assignee?: string[];
-  labels_any?: string[];
-  labels_all?: string[];
-  updated_since?: string;
-  cursor?: string;
-  limit?: number;
-}
+// transport_backend
+export type { TransportBackend, TransportConfig, TransportInfo, TransportSchema } from './roles/transport.js';
 
-/**
- * Result of `<kind>/list`. Field names MUST match the Rust `SubjectList` struct
- * in `crates/animus-subject-protocol`: `subjects` (not `items`) +
- * `fetched_at` (ISO-8601 timestamp). The SDK fills `fetched_at` automatically
- * when an author returns just `{ subjects }`.
- */
-export interface SubjectListResult {
-  subjects: Subject[];
-  next_cursor?: string | null;
-  /** ISO-8601 timestamp; auto-filled by the SDK if omitted. */
-  fetched_at?: string;
-}
+// log_storage_backend
+export type { LogStorageBackend, LogEntry, LogQuery, LogQueryResult, LogStorageSchema } from './roles/log-storage.js';
 
-/** Context passed to every subject-backend method. `kind` is parsed from the
- *  RPC method by the SDK so authors don't have to. */
-export interface SubjectCallContext extends CallContext {
-  /** Subject kind extracted from the JSON-RPC method (e.g. "task"). */
-  kind: string;
-}
+// v1.1.0 roles
+export type { Queue } from './roles/queue.js';
+export type { WorkflowRunner } from './roles/workflow-runner.js';
+export type { DurableStore } from './roles/durable-store.js';
+export type { MemoryStore } from './roles/memory-store.js';
+export type { Notifier } from './roles/notifier.js';
 
-/**
- * Wire shape of `<kind>/create` params, mirroring Rust `SubjectCreateRequest`.
- * The host serializes it directly as the JSON-RPC `params`, so authors get
- * the fields as top-level keys (NOT nested under `subject`).
- */
-export interface SubjectCreateRequest {
-  kind: string;
-  title: string;
-  description?: string;
-  status?: SubjectStatus;
-  priority?: number;
-  assignee?: string;
-  labels?: string[];
-  parent?: string;
-  url?: string;
-  custom?: Record<string, unknown>;
-}
+// --- deprecated source-compat aliases (provider was never wired before, so no
+// published plugin depends on the old shape; kept so old type imports compile) ---
 
-/**
- * Wire shape of `<kind>/update` `patch` payload, mirroring Rust
- * `SubjectPatch`. All fields are optional; missing fields are not modified.
- *
- * `assignee` uses a tri-state convention to disambiguate "not modified"
- * (`undefined`) from "explicitly clear" (`null`) from "set to X" (`"X"`) —
- * the same shape as Rust's `Option<Option<String>>`.
- *
- * Labels are split into add/remove sets to avoid lost-write races on the
- * labels list as a whole. Authors should NOT pass a `labels` array here.
- */
-export interface SubjectPatch {
-  status?: SubjectStatus;
-  /** Tri-state: `undefined` = no change, `null` = clear, `string` = set. */
-  assignee?: string | null;
-  labels_add?: string[];
-  labels_remove?: string[];
-  comment?: string;
-  custom?: Record<string, unknown>;
-}
-
-/** Result of an optional `health()` hook on any role impl. */
-export interface HealthReport {
-  status: 'healthy' | 'degraded' | 'unhealthy';
-  /** Optional human-readable note (surfaces in `animus plugin health`). */
-  last_error?: string | null;
-  uptime_ms?: number | null;
-  memory_usage_bytes?: number | null;
-}
-
-export interface SubjectBackend {
-  list(params: SubjectListParams, ctx: SubjectCallContext): Promise<SubjectListResult> | SubjectListResult;
-  get(params: { id: string }, ctx: SubjectCallContext): Promise<Subject | null> | Subject | null;
-  create?(params: SubjectCreateRequest, ctx: SubjectCallContext): Promise<Subject> | Subject;
-  update?(params: { id: string; patch: SubjectPatch }, ctx: SubjectCallContext): Promise<Subject> | Subject;
-  status?(params: { id: string; status: SubjectStatus }, ctx: SubjectCallContext): Promise<Subject> | Subject;
-  next?(params: Record<string, never>, ctx: SubjectCallContext): Promise<Subject | null> | Subject | null;
-  /**
-   * Optional `subject/schema` payload. When omitted, the SDK derives a small
-   * schema from `subject_kinds`.
-   */
-  schema?(ctx: CallContext): Promise<Record<string, unknown>> | Record<string, unknown>;
-  /**
-   * Optional health probe. When set, `health/check` returns whatever this
-   * function reports instead of the default `healthy`. Use for upstream
-   * service checks, required env-var validation, etc.
-   */
-  health?(ctx: CallContext): Promise<HealthReport> | HealthReport;
-}
-
-// ---- provider --------------------------------------------------------------
-// Skeleton only; wave 0.4.x already ships first-class Rust providers. The TS
-// SDK surfaces this for completeness so JS providers (e.g. a Vercel AI SDK
-// wrapper) can be authored later.
-
+/** @deprecated The provider contract now uses generated `AgentRunRequest`. */
 export interface ProviderRunParams {
   prompt: string;
   model?: string;
@@ -185,63 +49,11 @@ export interface ProviderRunParams {
   [key: string]: unknown;
 }
 
+/** @deprecated The provider contract now uses generated `AgentRunResponse`. */
 export interface ProviderRunResult {
   session_id: string;
   output: string;
   exit_code: number;
   duration_ms: number;
   [key: string]: unknown;
-}
-
-export interface Provider {
-  run(params: ProviderRunParams, ctx: CallContext): Promise<ProviderRunResult>;
-  cancel?(params: { session_id: string }, ctx: CallContext): Promise<void>;
-  resume?(params: ProviderRunParams & { session_id: string }, ctx: CallContext): Promise<ProviderRunResult>;
-}
-
-// ---- trigger_backend -------------------------------------------------------
-
-export interface TriggerEvent {
-  /** Stable event id, used for deduplication and `trigger/ack`. */
-  event_id: string;
-  /** Logical workflow trigger id supplied by `trigger/watch`. */
-  trigger_id?: string | null;
-  /** Optional subject id this event maps to. */
-  subject_id?: string | null;
-  /** Optional subject kind for `subject_id`, e.g. `"issue"` or `"task"`. */
-  subject_kind?: string | null;
-  /** Optional advisory action hint for workflow routing. */
-  action_hint?: string | null;
-  /** Trigger-specific JSON payload forwarded to the workflow. */
-  payload?: unknown;
-}
-
-export interface TriggerSchema {
-  kinds: string[];
-  supports_resume: boolean;
-  supports_dedup: boolean;
-  supports_ack: boolean;
-}
-
-export interface TriggerBackend {
-  /** Long-running event source consumed by the SDK and sent as `trigger/event` notifications. */
-  watch(params: Record<string, unknown>, ctx: CallContext): AsyncIterable<TriggerEvent> | Promise<AsyncIterable<TriggerEvent>>;
-  ack?(params: { event_id: string }, ctx: CallContext): Promise<void> | void;
-  schema?(ctx: CallContext): Promise<TriggerSchema> | TriggerSchema;
-  health?(ctx: CallContext): Promise<HealthReport> | HealthReport;
-}
-
-// ---- transport_backend -----------------------------------------------------
-
-export interface TransportBackend {
-  /** Implementation-defined; host calls `transport/start` to spawn the server. */
-  start(params: { config: unknown }, ctx: CallContext): Promise<{ endpoint: string }>;
-  stop?(ctx: CallContext): Promise<void>;
-}
-
-// ---- log_storage_backend ---------------------------------------------------
-
-export interface LogStorageBackend {
-  append(params: { stream: string; entries: unknown[] }, ctx: CallContext): Promise<void>;
-  query(params: { stream: string; filter?: unknown; limit?: number }, ctx: CallContext): Promise<unknown[]>;
 }

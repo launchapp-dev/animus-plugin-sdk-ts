@@ -1,7 +1,7 @@
 {
   "name": "@launchapp-dev/animus-plugin-sdk",
   "version": "0.1.1",
-  "description": "TypeScript SDK for authoring Animus plugins (subject backends, providers, triggers, transports, log storage).",
+  "description": "TypeScript SDK for authoring Animus plugins. Zod-typed, Rust protocol is the source of truth. Covers subject, provider, trigger, transport, log-storage, queue, workflow-runner, durable-store, memory-store, and notifier roles.",
   "license": "Elastic-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,11 +11,52 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./subject": {
+      "types": "./dist/subject.d.ts",
+      "import": "./dist/subject.js"
+    },
+    "./trigger": {
+      "types": "./dist/trigger.d.ts",
+      "import": "./dist/trigger.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "import": "./dist/transport.js"
+    },
+    "./log-storage": {
+      "types": "./dist/log-storage.d.ts",
+      "import": "./dist/log-storage.js"
+    },
+    "./queue": {
+      "types": "./dist/queue.d.ts",
+      "import": "./dist/queue.js"
+    },
+    "./workflow-runner": {
+      "types": "./dist/workflow-runner.d.ts",
+      "import": "./dist/workflow-runner.js"
+    },
+    "./durable-store": {
+      "types": "./dist/durable-store.d.ts",
+      "import": "./dist/durable-store.js"
+    },
+    "./memory-store": {
+      "types": "./dist/memory-store.d.ts",
+      "import": "./dist/memory-store.js"
+    },
+    "./notifier": {
+      "types": "./dist/notifier.d.ts",
+      "import": "./dist/notifier.js"
     }
   },
   "files": [
     "dist",
     "src",
+    "schemas",
     "README.md",
     "LICENSE"
   ],
@@ -42,9 +83,11 @@
       "optional": false
     }
   },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "@types/node": "^20.12.0",
-    "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.5.0",
     "vitest": "^1.6.0"
   },
@@ -65,6 +108,7 @@
     "plugin",
     "sdk",
     "jsonrpc",
-    "stdio"
+    "stdio",
+    "zod"
   ]
 }

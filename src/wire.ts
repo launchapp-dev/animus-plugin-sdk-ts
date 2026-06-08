@@ -37,6 +37,15 @@ export interface Wire {
   sendNotification(notification: RpcNotification): Promise<void>;
   /** Convenience: build + send a notification from method/params. */
   notify(method: string, params?: unknown): Promise<void>;
+  /**
+   * Register out-of-band background work (e.g. a long-running provider
+   * `agent/run` that streams notifications and sends its own final response
+   * later). `run()` will not resolve on EOF until all tracked work settles, so
+   * a detached run's final response is still flushed before shutdown. Rejections
+   * are swallowed (they are reported by the owning dispatcher); tracking only
+   * gates loop completion, it never poisons it.
+   */
+  track(work: Promise<unknown>): void;
   /** Begin consuming the input stream. Resolves when the stream closes (EOF). */
   run(handler: FrameHandler): Promise<void>;
 }
@@ -136,6 +145,15 @@ export function createWire(options: WireOptions = {}): Wire {
     return sendNotification(frame);
   };
 
+  // Out-of-band background work (detached provider runs). `finish()` drains
+  // this set so a run started just before EOF still flushes its final response.
+  const pending = new Set<Promise<unknown>>();
+  const track: Wire['track'] = (work) => {
+    const wrapped = Promise.resolve(work).catch(() => undefined);
+    pending.add(wrapped);
+    void wrapped.finally(() => pending.delete(wrapped));
+  };
+
   const run: Wire['run'] = (handler) =>
     new Promise<void>((resolve, reject) => {
       let buffer = '';
@@ -198,6 +216,12 @@ export function createWire(options: WireOptions = {}): Wire {
         }
         // Drain serialized dispatch chain before resolving.
         await dispatchChain;
+        // Then drain any out-of-band background work (detached provider runs)
+        // so their final responses are flushed before the loop resolves. A
+        // settling run may register follow-on work, so loop until quiescent.
+        while (pending.size > 0) {
+          await Promise.all([...pending]);
+        }
         resolve();
       };
 
@@ -217,7 +241,7 @@ export function createWire(options: WireOptions = {}): Wire {
       input.once('error', onError);
     });
 
-  return { sendResponse, sendNotification, notify, run };
+  return { sendResponse, sendNotification, notify, track, run };
 }
 
 /** Build an `ok` response for the given request id. */

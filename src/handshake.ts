@@ -10,6 +10,7 @@
 import type {
   InitializeParams,
   InitializeResult,
+  KindCapability,
   PluginCapabilities,
   PluginInfo,
   PluginManifest,
@@ -68,10 +69,15 @@ export function buildManifest(
   };
 }
 
-/** Build the `initialize` reply payload. */
+/** Build the `initialize` reply payload.
+ *
+ *  `kindCapabilities` (v1.1.0+) carries the per-kind protocol crate version for
+ *  the new kinds. v1.0.0 kinds pass `undefined`/empty so the wire output stays
+ *  byte-identical to the pre-v1.1.0 shape. */
 export function buildInitializeResult(
   identity: PluginIdentity,
   capabilities: PluginCapabilities,
+  kindCapabilities?: Record<string, KindCapability>,
 ): InitializeResult {
   const plugin_info: PluginInfo = {
     name: identity.name,
@@ -79,11 +85,16 @@ export function buildInitializeResult(
     plugin_kind: identity.plugin_kind,
     description: identity.description,
   };
-  return {
+  const result: InitializeResult = {
     protocol_version: PROTOCOL_VERSION,
     plugin_info,
     capabilities,
   };
+  if (kindCapabilities && Object.keys(kindCapabilities).length > 0) {
+    (result as InitializeResult & { kind_capabilities: Record<string, KindCapability> }).kind_capabilities =
+      kindCapabilities;
+  }
+  return result;
 }
 
 /**

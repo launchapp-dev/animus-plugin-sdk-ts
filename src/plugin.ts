@@ -3,17 +3,14 @@
 // Authors describe their plugin (identity + role + impl) and the SDK:
 //   1. handles `--manifest` CLI shortcut
 //   2. runs the stdio JSON-RPC loop
-//   3. dispatches `initialize`, `$/ping`, `health/check`, `shutdown`, `exit`,
-//      and role methods
-//   4. forwards unknown methods as `MethodNotFound`
+//   3. dispatches lifecycle methods (initialize/$/ping/health/check/shutdown/exit)
+//   4. validates inbound domain params with the generated Zod schemas and
+//      routes them to the author's `impl`
+//   5. forwards unknown methods as MethodNotFound
 //
-// Role coverage:
-//   - subject_backend: dispatched through the canonical `subject/*` protocol
-//     surface, with legacy `<kind>/*` compatibility routes.
-//   - trigger_backend: dispatched through `trigger/schema`, `trigger/watch`,
-//     and optional `trigger/ack`.
-//   - provider / transport_backend / log_storage_backend: dispatcher returns
-//     `MethodNotFound` until the relevant wave wires them.
+// All plugin roles from spec.md §7 are wired: subject_backend, trigger_backend,
+// provider, log_storage_backend, transport_backend, queue, workflow_runner,
+// durable_store, memory_store, notifier.
 
 import process from 'node:process';
 import { stdout as nodeStdout } from 'node:process';
@@ -24,14 +21,17 @@ import {
   validateInitializeParams,
   type PluginIdentity,
 } from './handshake.js';
-import type { Subject, TriggerEvent, TriggerSchema } from './roles.js';
-import {
-  type LogStorageBackend,
-  type Provider,
-  type SubjectBackend,
-  type TransportBackend,
-  type TriggerBackend,
-} from './roles.js';
+import type { CallContext } from './roles/context.js';
+import type { Subject, SubjectBackend } from './roles/subject.js';
+import type { TriggerBackend, TriggerEvent } from './roles/trigger.js';
+import type { Provider } from './roles/provider.js';
+import type { TransportBackend } from './roles/transport.js';
+import type { LogStorageBackend } from './roles/log-storage.js';
+import type { Queue } from './roles/queue.js';
+import type { WorkflowRunner } from './roles/workflow-runner.js';
+import type { DurableStore } from './roles/durable-store.js';
+import type { MemoryStore } from './roles/memory-store.js';
+import type { Notifier } from './roles/notifier.js';
 import { createWire, errorResponse, okResponse, type Wire } from './wire.js';
 import {
   ErrorCode,
@@ -39,6 +39,7 @@ import {
   type EnvRequirement,
   type HealthCheckResult,
   type InitializeParams,
+  type KindCapability,
   type PluginCapabilities,
   type PluginManifest,
   type RpcId,
@@ -46,31 +47,28 @@ import {
   type RpcResponse,
 } from './types/index.js';
 
+import { dispatchSubject, deriveSubjectCapabilities, ensureWireSubject } from './dispatch/subject.js';
+import { dispatchTrigger, deriveTriggerCapabilities } from './dispatch/trigger.js';
+import { dispatchProvider, PROVIDER_METHODS, ProviderSessionRegistry } from './dispatch/provider.js';
+import { dispatchLogStorage, LOG_STORAGE_METHODS } from './dispatch/log-storage.js';
+import { dispatchTransport, TRANSPORT_METHODS } from './dispatch/transport.js';
+import { dispatchQueue, QUEUE_METHODS, QUEUE_RELEASE_PENDING } from './dispatch/queue.js';
+import { dispatchWorkflowRunner, WORKFLOW_RUNNER_METHODS } from './dispatch/workflow-runner.js';
+import { dispatchDurableStore, DURABLE_STORE_METHODS } from './dispatch/durable-store.js';
+import { dispatchMemoryStore, MEMORY_STORE_METHODS } from './dispatch/memory-store.js';
+import { dispatchNotifier, deriveNotifierCapabilities } from './dispatch/notifier.js';
+
 type RoleSpec =
-  | {
-      kind: typeof PluginKind.SubjectBackend;
-      impl: SubjectBackend;
-      subject_kinds?: string[];
-      projections?: string[];
-    }
-  | {
-      kind: typeof PluginKind.Provider;
-      impl: Provider;
-    }
-  | {
-      kind: typeof PluginKind.TriggerBackend;
-      impl: TriggerBackend;
-      capabilities?: string[];
-    }
-  | {
-      kind: typeof PluginKind.TransportBackend;
-      impl: TransportBackend;
-      capabilities?: string[];
-    }
-  | {
-      kind: typeof PluginKind.LogStorageBackend;
-      impl: LogStorageBackend;
-    };
+  | { kind: typeof PluginKind.SubjectBackend; impl: SubjectBackend; subject_kinds?: string[]; projections?: string[] }
+  | { kind: typeof PluginKind.Provider; impl: Provider }
+  | { kind: typeof PluginKind.TriggerBackend; impl: TriggerBackend; capabilities?: string[] }
+  | { kind: typeof PluginKind.TransportBackend; impl: TransportBackend; capabilities?: string[] }
+  | { kind: typeof PluginKind.LogStorageBackend; impl: LogStorageBackend }
+  | { kind: typeof PluginKind.Queue; impl: Queue }
+  | { kind: typeof PluginKind.WorkflowRunner; impl: WorkflowRunner }
+  | { kind: typeof PluginKind.DurableStore; impl: DurableStore }
+  | { kind: typeof PluginKind.MemoryStore; impl: MemoryStore }
+  | { kind: typeof PluginKind.Notifier; impl: Notifier };
 
 export type PluginSpec = RoleSpec & {
   name: string;
@@ -79,6 +77,8 @@ export type PluginSpec = RoleSpec & {
   env_required?: EnvRequirement[];
   /** Author hint for the host's notification broadcast channel capacity. */
   notification_buffer_size?: number | null;
+  /** Extra opt-in capability strings (e.g. `$harness/...`) advertised verbatim. */
+  extra_capabilities?: string[];
   /** Optional override of the inbound stream (for testing). */
   input?: NodeJS.ReadableStream;
   /** Optional override of the outbound stream (for testing). */
@@ -97,176 +97,129 @@ export interface PluginHandle {
 }
 
 function deriveCapabilities(spec: PluginSpec): PluginCapabilities {
-  if (spec.kind === PluginKind.SubjectBackend) {
-    const kinds = spec.subject_kinds ?? [];
-    const methods: string[] = ['subject/list', 'subject/get', 'subject/schema', 'health/check'];
-    if (spec.impl.update) methods.push('subject/update');
-    if (spec.impl.create) methods.push('subject/create');
-    if (spec.impl.status) methods.push('subject/status');
-    if (spec.impl.next) methods.push('subject/next');
-    // Compatibility with older daemon builds that routed subject calls as
-    // `<kind>/<verb>`. Keep these advertised so old and new CLIs can install
-    // the same plugin binaries during the protocol transition.
-    const legacyVerbs = methods
-      .filter((m) => m.startsWith('subject/'))
-      .map((m) => m.slice('subject/'.length));
-    for (const kind of kinds) {
-      for (const verb of legacyVerbs) methods.push(`${kind}/${verb}`);
+  switch (spec.kind) {
+    case PluginKind.SubjectBackend:
+      return deriveSubjectCapabilities(spec.impl, spec.subject_kinds ?? [], spec.projections ?? []);
+    case PluginKind.TriggerBackend:
+      return deriveTriggerCapabilities(spec.impl, spec.capabilities ?? []);
+    case PluginKind.Provider: {
+      // Advertise only what we can serve — `agent/run` is required; resume/
+      // cancel are optional and gated on the impl so the host's preflight
+      // doesn't route them here when absent.
+      const methods = [PROVIDER_METHODS.run, 'health/check'];
+      if (spec.impl.resume) methods.push(PROVIDER_METHODS.resume);
+      if (spec.impl.cancel) methods.push(PROVIDER_METHODS.cancel);
+      // `cancellation` advertises `$/cancelRequest` support, which the SDK now
+      // wires: a `$/cancelRequest` for an in-flight run aborts it via the
+      // session's AbortSignal and resolves the run with `-32002`. `agent/cancel`
+      // (in `methods` when the impl provides it) is the session-scoped surface.
+      return { methods, streaming: true, progress: false, cancellation: true };
     }
-    return {
-      methods,
-      streaming: false,
-      progress: false,
-      cancellation: false,
-      subject_kinds: kinds,
-      projections: spec.projections ?? [],
-    };
+    case PluginKind.LogStorageBackend: {
+      const methods = [LOG_STORAGE_METHODS.store, LOG_STORAGE_METHODS.schema, 'health/check'];
+      if (spec.impl.query) methods.push(LOG_STORAGE_METHODS.query);
+      if (spec.impl.tail) methods.push(LOG_STORAGE_METHODS.tail);
+      return { methods, streaming: !!spec.impl.tail, progress: false, cancellation: false };
+    }
+    case PluginKind.TransportBackend: {
+      const methods = [TRANSPORT_METHODS.start, TRANSPORT_METHODS.shutdown, TRANSPORT_METHODS.schema, 'health/check'];
+      return { methods, streaming: false, progress: false, cancellation: false };
+    }
+    case PluginKind.Queue: {
+      const methods = [...Object.values(QUEUE_METHODS), 'health/check'];
+      if (spec.impl.release_pending) methods.push(QUEUE_RELEASE_PENDING);
+      return { methods, streaming: false };
+    }
+    case PluginKind.WorkflowRunner:
+      return { methods: [...Object.values(WORKFLOW_RUNNER_METHODS), 'health/check'], streaming: false };
+    case PluginKind.DurableStore:
+      return { methods: [...Object.values(DURABLE_STORE_METHODS), 'health/check'], streaming: false };
+    case PluginKind.MemoryStore:
+      return { methods: [...Object.values(MEMORY_STORE_METHODS), 'health/check'], streaming: false };
+    case PluginKind.Notifier:
+      return deriveNotifierCapabilities(spec.impl);
+    default:
+      return { methods: [] };
   }
-  if (spec.kind === PluginKind.TriggerBackend) {
-    const methods = ['trigger/watch', 'trigger/schema', 'health/check'];
-    if (spec.impl.ack) methods.push('trigger/ack');
-    for (const c of spec.capabilities ?? []) methods.push(c);
-    return { methods, streaming: true, progress: false, cancellation: false };
-  }
-  // Non-subject roles are skeleton-only in 0.1.0: dispatchRole returns
-  // MethodNotFound for every domain method. Advertising methods we cannot
-  // actually serve would let preflight pick this plugin as a provider /
-  // trigger / transport / log backend and then fail every real call. Until
-  // those role dispatchers are wired, surface an EMPTY method list so the
-  // host's discovery still sees the plugin (`health/check` is always
-  // implemented by the base dispatcher) but doesn't route domain calls here.
-  // `transport_backend` callers can still pass `spec.capabilities` for
-  // non-domain hints (e.g. role tags) — kept on the manifest via
-  // `extra_capabilities` rather than methods.
-  if (spec.kind === PluginKind.Provider || spec.kind === PluginKind.TransportBackend || spec.kind === PluginKind.LogStorageBackend) {
-    return { methods: [], streaming: false, progress: false, cancellation: false };
-  }
-  return { methods: [] };
 }
 
 function validateSpec(spec: PluginSpec): void {
-  if (!spec.name || typeof spec.name !== 'string') {
-    throw new TypeError('definePlugin: `name` is required');
-  }
-  if (!spec.version || typeof spec.version !== 'string') {
-    throw new TypeError('definePlugin: `version` is required');
-  }
-  if (!spec.description || typeof spec.description !== 'string') {
+  if (!spec.name || typeof spec.name !== 'string') throw new TypeError('definePlugin: `name` is required');
+  if (!spec.version || typeof spec.version !== 'string') throw new TypeError('definePlugin: `version` is required');
+  if (!spec.description || typeof spec.description !== 'string')
     throw new TypeError('definePlugin: `description` is required');
-  }
-  if (!spec.kind) {
-    throw new TypeError('definePlugin: `kind` is required');
-  }
+  if (!spec.kind) throw new TypeError('definePlugin: `kind` is required');
   const valid = new Set<string>(Object.values(PluginKind));
-  if (!valid.has(spec.kind)) {
-    throw new TypeError(`definePlugin: unknown kind '${spec.kind}'`);
-  }
-  if (!spec.impl || typeof spec.impl !== 'object') {
-    throw new TypeError('definePlugin: `impl` is required');
-  }
-  if (spec.kind === PluginKind.SubjectBackend) {
-    const impl = spec.impl as SubjectBackend;
-    if (typeof impl.list !== 'function') throw new TypeError('subject_backend impl must implement list()');
-    if (typeof impl.get !== 'function') throw new TypeError('subject_backend impl must implement get()');
-    return;
-  }
-  if (spec.kind === PluginKind.TriggerBackend) {
-    const impl = spec.impl as TriggerBackend;
-    if (typeof impl.watch !== 'function') throw new TypeError('trigger_backend impl must implement watch()');
-    return;
-  }
-  // Provider, transport, and log storage dispatchers are intentionally still
-  // rejected until their role methods are wired end to end. The daemon
-  // discovers plugins by `manifest.plugin_kind` and would route real calls to
-  // a plugin that cannot answer if we accepted those specs prematurely.
-  throw new Error(
-    `definePlugin: kind '${spec.kind}' is not yet wired in the TS SDK (0.1.0). ` +
-      'Only subject_backend and trigger_backend are supported in this release. ' +
-      'See README.md "Roles" table for the roadmap.',
-  );
-}
+  if (!valid.has(spec.kind)) throw new TypeError(`definePlugin: unknown kind '${spec.kind}'`);
+  if (!spec.impl || typeof spec.impl !== 'object') throw new TypeError('definePlugin: `impl` is required');
 
-function notImplemented(id: RpcId | undefined, method: string, kind: string): RpcResponse {
-  return errorResponse(
-    id,
-    ErrorCode.MethodNotFound,
-    `method '${method}' not implemented in TS SDK for kind '${kind}' yet`,
-  );
+  const requireMethods = (kind: string, impl: Record<string, unknown>, methods: string[]) => {
+    for (const m of methods) {
+      if (typeof impl[m] !== 'function') throw new TypeError(`${kind} impl must implement ${m}()`);
+    }
+  };
+
+  switch (spec.kind) {
+    case PluginKind.SubjectBackend:
+      requireMethods('subject_backend', spec.impl as never, ['list', 'get']);
+      return;
+    case PluginKind.TriggerBackend:
+      requireMethods('trigger_backend', spec.impl as never, ['watch']);
+      return;
+    case PluginKind.Provider:
+      requireMethods('provider', spec.impl as never, ['run']);
+      return;
+    case PluginKind.TransportBackend:
+      requireMethods('transport_backend', spec.impl as never, ['start']);
+      return;
+    case PluginKind.LogStorageBackend:
+      requireMethods('log_storage_backend', spec.impl as never, ['store']);
+      return;
+    case PluginKind.Queue:
+      // All queue methods are advertised and dispatched unconditionally, so
+      // require the full set up front rather than failing with a TypeError at
+      // call time for a JS-authored / cast impl missing one.
+      requireMethods('queue', spec.impl as never, [
+        'enqueue',
+        'list',
+        'lease',
+        'stats',
+        'hold',
+        'release',
+        'drop',
+        'mark_assigned',
+        'completion',
+        'reorder',
+      ]);
+      return;
+    case PluginKind.WorkflowRunner:
+      requireMethods('workflow_runner', spec.impl as never, ['execute', 'run_phase']);
+      return;
+    case PluginKind.DurableStore:
+      requireMethods('durable_store', spec.impl as never, [
+        'begin_workflow_run',
+        'begin_step',
+        'commit_step',
+        'abandon_step',
+        'recover_in_flight',
+        'query_run',
+      ]);
+      return;
+    case PluginKind.MemoryStore:
+      requireMethods('memory_store', spec.impl as never, ['put', 'get', 'query', 'list_scopes', 'delete_scope']);
+      return;
+    case PluginKind.Notifier:
+      requireMethods('notifier', spec.impl as never, ['notify']);
+      return;
+    default:
+      throw new Error(`definePlugin: kind '${(spec as { kind: string }).kind}' is not supported`);
+  }
 }
 
 function buildHealthOk(): HealthCheckResult {
   return { status: 'healthy', uptime_ms: null, memory_usage_bytes: null, last_error: null };
 }
 
-/**
- * Ensure a subject record carries the wire-mandatory fields the Rust daemon
- * expects (`status`, `created_at`, `updated_at`). Authors who hand back a
- * sparse `{ id, kind, title }` for hello-world examples get a sensible default
- * (`ready`, now, now) instead of an undecodable response.
- *
- * This is a safety net, not an excuse to skip the fields — production
- * backends should set all three explicitly from their source-of-truth.
- */
-function ensureWireSubject(s: Subject | (Partial<Subject> & { id: string; kind: string; title: string })): Subject {
-  const nowIso = new Date().toISOString();
-  return {
-    status: 'ready',
-    created_at: nowIso,
-    updated_at: nowIso,
-    ...s,
-  } as Subject;
-}
-
-function defaultSubjectSchema(kinds: string[]): Record<string, unknown> {
-  return {
-    kinds,
-    status_values: ['ready', 'in-progress', 'blocked', 'done', 'cancelled'],
-    supports_watch: false,
-    supports_create: false,
-    supports_pagination: true,
-    native_status_values: [],
-    status_dispatch_hints: [],
-    custom_fields: [],
-  };
-}
-
-function defaultTriggerSchema(impl: TriggerBackend): TriggerSchema {
-  return {
-    kinds: [],
-    supports_resume: false,
-    supports_dedup: false,
-    supports_ack: typeof impl.ack === 'function',
-  };
-}
-
-function ensureWireTriggerEvent(event: TriggerEvent): TriggerEvent {
-  return {
-    trigger_id: null,
-    subject_id: null,
-    subject_kind: null,
-    action_hint: null,
-    payload: null,
-    ...event,
-  };
-}
-
-/**
- * Author-facing entrypoint. Returns a handle whose `run()` drives the JSON-RPC
- * loop until stdin closes.
- *
- * @example
- * definePlugin({
- *   kind: 'subject_backend',
- *   name: 'hello-subjects',
- *   version: '0.1.0',
- *   description: 'Hard-coded sample subject backend',
- *   subject_kinds: ['task'],
- *   impl: {
- *     list: () => ({ items: [{ id: 'task:1', kind: 'task', title: 'hello' }] }),
- *     get: ({ id }) => ({ id, kind: 'task', title: 'hello' }),
- *   },
- * }).run();
- */
 export function definePlugin(spec: PluginSpec): PluginHandle {
   validateSpec(spec);
   const identity: PluginIdentity = {
@@ -276,23 +229,24 @@ export function definePlugin(spec: PluginSpec): PluginHandle {
     plugin_kind: spec.kind,
   };
   const capabilities = deriveCapabilities(spec);
-  // For subject backends, also surface `subject_kind:<kind>` capability tokens
-  // so the daemon's preflight + doctor can recognize coverage from the manifest
-  // alone (without spawning the plugin).
+
+  // Manifest-only capability tokens that aid host preflight without spawning.
   const extraCaps: string[] = [];
   if (spec.kind === PluginKind.SubjectBackend && spec.subject_kinds) {
-    // TODO(codex-p2): the daemon's preflight (`plugin_preflight::covers_subject_kind`)
-    // currently does exact-string matching on these tokens, so a wildcard
-    // `task.*` is announced as `subject_kind:task.*` but won't match a
-    // preflight requirement for `subject_kind:task.foo`. Routing at runtime
-    // still works (SubjectRouter does glob matching). Fix requires a Rust-
-    // side change to teach preflight about `.*` suffixes; tracked for the
-    // next wave. For now we emit the raw token verbatim.
     for (const k of spec.subject_kinds) extraCaps.push(`subject_kind:${k}`);
   }
   if (spec.kind === PluginKind.TransportBackend && spec.capabilities) {
     for (const c of spec.capabilities) extraCaps.push(c);
   }
+  if (spec.extra_capabilities) {
+    for (const c of spec.extra_capabilities) extraCaps.push(c);
+  }
+
+  // v1.1.0: advertise the per-kind protocol crate version via kind_capabilities
+  // for the new kinds. v1.0.0 kinds leave this empty so the wire output stays
+  // byte-identical for the 299 published subject plugins.
+  const kindCapabilities = deriveKindCapabilities(spec);
+
   const manifestPayload: PluginManifest = buildManifest(identity, capabilities, {
     env_required: spec.env_required,
     notification_buffer_size: spec.notification_buffer_size,
@@ -303,14 +257,26 @@ export function definePlugin(spec: PluginSpec): PluginHandle {
     manifest: () => manifestPayload,
     initialize: (params) => {
       const incompat = validateInitializeParams(params);
-      if (incompat) {
-        return errorResponse(null, ErrorCode.InvalidRequest, incompat);
-      }
-      return okResponse(null, buildInitializeResult(identity, capabilities));
+      if (incompat) return errorResponse(null, ErrorCode.InvalidRequest, incompat);
+      return okResponse(null, buildInitializeResult(identity, capabilities, kindCapabilities));
     },
-    run: () => runLoop(spec, manifestPayload, identity, capabilities),
+    run: () => runLoop(spec, manifestPayload, identity, capabilities, kindCapabilities),
   };
   return handle;
+}
+
+function deriveKindCapabilities(spec: PluginSpec): Record<string, KindCapability> | undefined {
+  // Only emit for v1.1.0 kinds; keep empty for v1.0.0 kinds (back-compat).
+  const v11: Record<string, string> = {
+    [PluginKind.WorkflowRunner]: 'workflow_runner',
+    [PluginKind.Queue]: 'queue',
+    [PluginKind.DurableStore]: 'durable_store',
+    [PluginKind.MemoryStore]: 'memory_store',
+    [PluginKind.Notifier]: 'notifier',
+  };
+  const key = v11[spec.kind];
+  if (!key) return undefined;
+  return { [key]: { crate_version: '0.1.0', extra: {} } };
 }
 
 async function runLoop(
@@ -318,19 +284,13 @@ async function runLoop(
   manifestPayload: PluginManifest,
   identity: PluginIdentity,
   capabilities: PluginCapabilities,
+  kindCapabilities: Record<string, KindCapability> | undefined,
 ): Promise<void> {
   if (!spec.skipCliArgs) {
-    // Honor `--manifest` / `-m`: print to stdout, exit 0. Honor `--help` / `-h`.
     const args = process.argv.slice(2);
     if (args.includes('--manifest') || args.includes('-m')) {
-      // Wait for the write callback so the manifest fully flushes before exit
-      // — Node pipe writes are async, and a bare `process.exit` after `write`
-      // can truncate the discovery output.
       await new Promise<void>((resolve, reject) => {
-        nodeStdout.write(`${JSON.stringify(manifestPayload)}\n`, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
+        nodeStdout.write(`${JSON.stringify(manifestPayload)}\n`, (err) => (err ? reject(err) : resolve()));
       });
       process.exit(0);
     }
@@ -353,7 +313,13 @@ async function runLoop(
     output: spec.output as NodeJS.WritableStream | undefined as never,
   });
 
-  await wire.run((frame) => dispatch(frame, wire, spec, identity, capabilities));
+  // One session registry per plugin instance. Only provider plugins populate
+  // it (run/resume register; agent/cancel + $/cancelRequest interrupt).
+  const providerSessions = new ProviderSessionRegistry();
+
+  await wire.run((frame) =>
+    dispatch(frame, wire, spec, identity, capabilities, kindCapabilities, providerSessions),
+  );
 }
 
 async function dispatch(
@@ -362,26 +328,30 @@ async function dispatch(
   spec: PluginSpec,
   identity: PluginIdentity,
   capabilities: PluginCapabilities,
+  kindCapabilities: Record<string, KindCapability> | undefined,
+  providerSessions: ProviderSessionRegistry,
 ): Promise<RpcResponse | undefined> {
   const id = frame.id;
   const method = frame.method;
 
-  // Notifications: never respond. The host's graceful shutdown sequence is
-  // `shutdown` (request) → `exit` (notification with no id); honor the latter
-  // by exiting cleanly so we don't get force-killed after the grace period.
-  //
-  // Per JSON-RPC 2.0, ONLY a missing `id` makes a frame a notification;
-  // `id: null` is still a request (the type allows null). Treat null and
-  // numeric/string ids the same when dispatching.
+  // Notifications (no id): never respond.
   if (id === undefined) {
     if (method === 'exit') {
       setImmediate(() => process.exit(0));
       return undefined;
     }
-    if (method === 'initialized' || method.startsWith('$/')) {
+    // `$/cancelRequest` (spec §6.3): for a provider, best-effort cancel the
+    // in-flight run started by that request id. The detached run then resolves
+    // with `-32002` (request_cancelled). For other roles this is a no-op. We
+    // run this on the serial chain (it's cheap + synchronous), so it stays
+    // ordered relative to other inbound frames.
+    if (method === '$/cancelRequest' && spec.kind === PluginKind.Provider) {
+      const cancelId = (frame.params as { id?: RpcId } | undefined)?.id;
+      if (cancelId !== undefined) providerSessions.cancelByRequest(cancelId);
       return undefined;
     }
-    // Drop unknown notifications silently to match Rust runtime.
+    // `initialized`, `$/progress`, and unknown notifications are dropped
+    // silently to match the Rust runtime.
     return undefined;
   }
 
@@ -389,53 +359,49 @@ async function dispatch(
     case 'initialize': {
       const params = (frame.params ?? {}) as InitializeParams;
       const incompat = validateInitializeParams(params);
-      if (incompat) {
-        return errorResponse(id, ErrorCode.InvalidRequest, incompat);
-      }
-      // Use the shared helper so the protocol version flows from
-      // `PROTOCOL_VERSION` instead of being hardcoded — otherwise a future
-      // version bump would silently desync the run-loop reply from the
-      // manifest.
-      return okResponse(id, buildInitializeResult(identity, capabilities));
+      if (incompat) return errorResponse(id, ErrorCode.InvalidRequest, incompat);
+      return okResponse(id, buildInitializeResult(identity, capabilities, kindCapabilities));
     }
     case '$/ping':
       return okResponse(id, {});
-    case 'health/check': {
-      // Delegate to the backend's optional `health()` hook if present so
-      // backends that depend on upstream services can degrade
-      // gracefully. Default to `healthy` for backends without a probe.
-      if (
-        (spec.kind === PluginKind.SubjectBackend || spec.kind === PluginKind.TriggerBackend) &&
-        typeof spec.impl.health === 'function'
-      ) {
-        try {
-          const report = await spec.impl.health({ request_id: id });
-          return okResponse(id, {
-            status: report.status,
-            uptime_ms: report.uptime_ms ?? null,
-            memory_usage_bytes: report.memory_usage_bytes ?? null,
-            last_error: report.last_error ?? null,
-          });
-        } catch (err) {
-          return okResponse(id, {
-            status: 'unhealthy',
-            uptime_ms: null,
-            memory_usage_bytes: null,
-            last_error: `health probe threw: ${String(err)}`,
-          });
-        }
-      }
-      return okResponse(id, buildHealthOk());
-    }
+    case 'health/check':
+      return handleHealth(id, spec);
     case 'shutdown':
       return okResponse(id, {});
     case 'exit':
-      // Acknowledge then exit on next tick so the response flushes.
       setImmediate(() => process.exit(0));
       return okResponse(id, {});
     default:
-      return dispatchRole(id, frame, wire, spec);
+      return dispatchRole(id, frame, wire, spec, providerSessions);
   }
+}
+
+async function handleHealth(id: RpcId, spec: PluginSpec): Promise<RpcResponse> {
+  const impl = spec.impl as { health?: (ctx: CallContext) => unknown };
+  if (typeof impl.health === 'function') {
+    try {
+      const report = (await impl.health({ request_id: id })) as {
+        status: string;
+        uptime_ms?: number | null;
+        memory_usage_bytes?: number | null;
+        last_error?: string | null;
+      };
+      return okResponse(id, {
+        status: report.status,
+        uptime_ms: report.uptime_ms ?? null,
+        memory_usage_bytes: report.memory_usage_bytes ?? null,
+        last_error: report.last_error ?? null,
+      });
+    } catch (err) {
+      return okResponse(id, {
+        status: 'unhealthy',
+        uptime_ms: null,
+        memory_usage_bytes: null,
+        last_error: `health probe threw: ${String(err)}`,
+      });
+    }
+  }
+  return okResponse(id, buildHealthOk());
 }
 
 async function dispatchRole(
@@ -443,206 +409,34 @@ async function dispatchRole(
   frame: RpcRequest,
   wire: Wire,
   spec: PluginSpec,
-): Promise<RpcResponse> {
-  const method = frame.method;
-  const ctx = { request_id: id };
-
-  if (spec.kind === PluginKind.SubjectBackend) {
-    const impl = spec.impl;
-    const slash = method.indexOf('/');
-    if (slash < 1) {
-      return errorResponse(id, ErrorCode.MethodNotFound, `unknown method '${method}'`);
-    }
-    const prefix = method.slice(0, slash);
-    const verb = method.slice(slash + 1);
-    const declaredKinds = spec.subject_kinds ?? [];
-    const rawParams = (frame.params ?? {}) as Record<string, unknown>;
-
-    const matchesDeclared = (incoming: string): boolean => {
-      for (const decl of declaredKinds) {
-        if (decl === incoming) return true;
-        if (decl.endsWith('.*')) {
-          const stem = decl.slice(0, -1); // keep trailing "."
-          if (incoming.startsWith(stem)) return true;
-        }
-      }
-      return false;
-    };
-
-    const kindFromId = (value: unknown): string | null => {
-      if (typeof value !== 'string') return null;
-      const colon = value.indexOf(':');
-      return colon > 0 ? value.slice(0, colon) : null;
-    };
-
-    const kindFromParams = (): string => {
-      const explicitKind = rawParams.kind;
-      if (typeof explicitKind === 'string' && explicitKind.length > 0) return explicitKind;
-      const nestedKind = rawParams.filter && typeof rawParams.filter === 'object'
-        ? (rawParams.filter as Record<string, unknown>).kind
-        : undefined;
-      if (Array.isArray(nestedKind) && typeof nestedKind[0] === 'string') return nestedKind[0];
-      if (Array.isArray(explicitKind) && typeof explicitKind[0] === 'string') return explicitKind[0];
-      const idKind = kindFromId(rawParams.id);
-      if (idKind) return idKind;
-      return declaredKinds[0] ?? 'subject';
-    };
-
-    // Current protocol dispatches `subject/<verb>`. Older daemon builds routed
-    // direct to `<kind>/<verb>`. Support both, but only validate kind prefixes
-    // on legacy routes where the prefix actually names a subject kind.
-    const legacyKindRoute = prefix !== 'subject';
-    const kind = legacyKindRoute ? prefix : kindFromParams();
-
-    if (legacyKindRoute && declaredKinds.length > 0 && !matchesDeclared(kind)) {
-      return errorResponse(
-        id,
-        ErrorCode.MethodNotFound,
-        `plugin does not serve subject kind '${kind}'`,
-      );
-    }
-    const subjectCtx = { ...ctx, kind };
-    // The kind is carried by the method prefix on the wire. Authors expect to
-    // see it via `ctx.kind`, but some impls (especially `create`) also need it
-    // as a top-level param. Inject it when missing so authors don't see
-    // `undefined` where the type contract promises a value.
-    try {
-      switch (verb) {
-        case 'schema': {
-          const schema = impl.schema
-            ? await impl.schema(subjectCtx)
-            : defaultSubjectSchema(declaredKinds.length > 0 ? declaredKinds : [kind]);
-          return okResponse(id, schema);
-        }
-        case 'list': {
-          // Wire shape varies by caller:
-          //   - daemon control surface sends `{ filter: SubjectFilter }`
-          //   - direct routed callers may send a flat SubjectFilter
-          // Normalize both into a flat shape so the SDK's SubjectListParams
-          // contract is honored. Multi-kind callers (e.g. the CLI sending
-          // `filter.kind=[task, requirement]`) are routed by the host once
-          // per kind but the original kinds list is forwarded verbatim — so
-          // we ALWAYS replace `kind` with `[routed-kind]` to prevent a `task`
-          // backend from being asked to honor `requirement` in its filter.
-          const flat =
-            rawParams.filter && typeof rawParams.filter === 'object'
-              ? ({ ...(rawParams.filter as Record<string, unknown>) } as Record<string, unknown>)
-              : ({ ...rawParams } as Record<string, unknown>);
-          const listParams: Record<string, unknown> = { ...flat };
-          if (legacyKindRoute || listParams.kind === undefined) {
-            listParams.kind = [kind];
-          }
-          const out = await impl.list(listParams as never, subjectCtx);
-          const filled = {
-            subjects: (out.subjects ?? []).map(ensureWireSubject),
-            ...(out.next_cursor !== undefined ? { next_cursor: out.next_cursor } : {}),
-            fetched_at: out.fetched_at ?? new Date().toISOString(),
-          };
-          return okResponse(id, filled);
-        }
-        case 'get': {
-          const out = await impl.get(rawParams as never, subjectCtx);
-          if (out === null || out === undefined) {
-            // The daemon's subject_get path decodes the result directly as a
-            // WireSubject and treats a missing payload as a decode error.
-            // Translate the SDK's permitted "null = not found" return into
-            // the canonical not-found RpcError shape from
-            // `animus_subject_protocol::BackendError::NotFound`.
-            const subjectId = (rawParams as { id?: unknown }).id;
-            return errorResponse(
-              id,
-              ErrorCode.InvalidParams,
-              `not found: subject '${typeof subjectId === 'string' ? subjectId : '?'}'`,
-              { category: 'not_found' },
-            );
-          }
-          return okResponse(id, ensureWireSubject(out));
-        }
-        case 'create': {
-          if (!impl.create) return notImplemented(id, method, spec.kind);
-          // Backfill required `SubjectCreateRequest.kind` from the routed kind
-          // so direct callers that omit it still hit the impl with a valid
-          // payload (the daemon control surface fills it, but routed clients
-          // may not). Map the CLI's `body` field onto the SDK's documented
-          // `description` so authors only have to read one name regardless of
-          // caller.
-          // Spread first, then force `kind` to the routed value — a caller
-          // who sends `task/create` with `params.kind = 'requirement'` is
-          // bug, not a feature. Match the list dispatcher's authoritative-
-          // route-kind behavior.
-          const createParams: Record<string, unknown> = { ...rawParams, kind };
-          if (createParams.body !== undefined && createParams.description === undefined) {
-            createParams.description = createParams.body;
-            delete createParams.body;
-          }
-          return okResponse(id, ensureWireSubject(await impl.create(createParams as never, subjectCtx)));
-        }
-        case 'update':
-          if (!impl.update) return notImplemented(id, method, spec.kind);
-          return okResponse(id, ensureWireSubject(await impl.update(rawParams as never, subjectCtx)));
-        case 'status':
-          if (!impl.status) return notImplemented(id, method, spec.kind);
-          return okResponse(id, ensureWireSubject(await impl.status(rawParams as never, subjectCtx)));
-        case 'next': {
-          if (!impl.next) return notImplemented(id, method, spec.kind);
-          const out = await impl.next(rawParams as never, subjectCtx);
-          return okResponse(id, out ? ensureWireSubject(out) : null);
-        }
-        default:
-          return errorResponse(id, ErrorCode.MethodNotFound, `unknown method '${method}'`);
-      }
-    } catch (err) {
-      return errorResponse(id, ErrorCode.InternalError, `subject backend error: ${String(err)}`);
-    }
+  providerSessions: ProviderSessionRegistry,
+): Promise<RpcResponse | undefined> {
+  switch (spec.kind) {
+    case PluginKind.SubjectBackend:
+      return dispatchSubject(id, frame, spec.impl, spec.subject_kinds ?? []);
+    case PluginKind.TriggerBackend:
+      return dispatchTrigger(id, frame, wire, spec.impl);
+    case PluginKind.Provider:
+      return dispatchProvider(id, frame, wire, spec.impl, providerSessions);
+    case PluginKind.LogStorageBackend:
+      return dispatchLogStorage(id, frame, wire, spec.impl);
+    case PluginKind.TransportBackend:
+      return dispatchTransport(id, frame, spec.impl);
+    case PluginKind.Queue:
+      return dispatchQueue(id, frame, spec.impl);
+    case PluginKind.WorkflowRunner:
+      return dispatchWorkflowRunner(id, frame, spec.impl);
+    case PluginKind.DurableStore:
+      return dispatchDurableStore(id, frame, spec.impl);
+    case PluginKind.MemoryStore:
+      return dispatchMemoryStore(id, frame, spec.impl);
+    case PluginKind.Notifier:
+      return dispatchNotifier(id, frame, spec.impl);
+    default:
+      return errorResponse(id, ErrorCode.MethodNotFound, `unknown method '${frame.method}'`);
   }
-
-  if (spec.kind === PluginKind.TriggerBackend) {
-    const impl = spec.impl;
-    const rawParams = (frame.params ?? {}) as Record<string, unknown>;
-    try {
-      switch (method) {
-        case 'trigger/schema': {
-          const schema = impl.schema ? await impl.schema(ctx) : defaultTriggerSchema(impl);
-          return okResponse(id, schema);
-        }
-        case 'trigger/watch': {
-          const stream = await impl.watch(rawParams, ctx);
-          void (async () => {
-            try {
-              for await (const event of stream) {
-                await wire.notify('trigger/event', ensureWireTriggerEvent(event));
-              }
-            } catch (err) {
-              await wire.notify('trigger/event', {
-                error: {
-                  code: ErrorCode.InternalError,
-                  message: `trigger stream error: ${String(err)}`,
-                },
-              });
-            }
-          })();
-          return okResponse(id, { watching: true });
-        }
-        case 'trigger/ack': {
-          if (!impl.ack) return notImplemented(id, method, spec.kind);
-          const eventId = rawParams.event_id;
-          if (typeof eventId !== 'string' || eventId.length === 0) {
-            return errorResponse(id, ErrorCode.InvalidParams, 'trigger/ack requires string event_id');
-          }
-          await impl.ack({ event_id: eventId }, ctx);
-          return okResponse(id, { event_id: eventId, acked: true });
-        }
-        default:
-          return notImplemented(id, method, spec.kind);
-      }
-    } catch (err) {
-      return errorResponse(id, ErrorCode.InternalError, `trigger backend error: ${String(err)}`);
-    }
-  }
-
-  // Non-subject roles: skeleton only — every domain method responds with a
-  // structured `MethodNotFound`. We still keep `wire` in scope so future
-  // streaming-capable roles (provider/trigger) can capture it via closure.
-  void wire;
-  return notImplemented(id, method, spec.kind);
 }
+
+// Re-export the wire-subject backfill helper for tests.
+export { ensureWireSubject };
+export type { Subject, TriggerEvent };

@@ -1,23 +1,18 @@
 #!/usr/bin/env node
 // CI-side drift check. Re-runs codegen into a temp directory (via the
-// ANIMUS_CODEGEN_OUT_DIR override) and diffs the result against the
-// committed files under src/types/. Exits non-zero if any byte differs
-// so PRs that touch the Rust schemas without regenerating get caught.
+// ANIMUS_CODEGEN_OUT_DIR override) and diffs the result against the committed
+// generated Zod modules under src/types/generated/. Exits non-zero if any byte
+// differs so PRs that touch the vendored Rust schemas without regenerating get
+// caught.
 
 import { spawnSync } from "node:child_process";
-import {
-  mkdtempSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const committedDir = resolve(__dirname, "../src/types");
+const committedDir = resolve(__dirname, "../src/types/generated");
 const codegenScript = resolve(__dirname, "codegen.mjs");
 
 const stagingDir = mkdtempSync(resolve(tmpdir(), "animus-codegen-check-"));
@@ -32,17 +27,17 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-const committed = new Map();
-for (const f of readdirSync(committedDir)) {
-  if (!f.endsWith(".ts")) continue;
-  committed.set(f, readFileSync(resolve(committedDir, f), "utf8"));
+function loadDir(dir) {
+  const map = new Map();
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".ts")) continue;
+    map.set(f, readFileSync(resolve(dir, f), "utf8"));
+  }
+  return map;
 }
 
-const fresh = new Map();
-for (const f of readdirSync(stagingDir)) {
-  if (!f.endsWith(".ts")) continue;
-  fresh.set(f, readFileSync(resolve(stagingDir, f), "utf8"));
-}
+const committed = loadDir(committedDir);
+const fresh = loadDir(stagingDir);
 
 let drift = false;
 const allFiles = new Set([...committed.keys(), ...fresh.keys()]);

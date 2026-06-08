@@ -221,7 +221,7 @@ describe('definePlugin', () => {
     ).toThrow();
   });
 
-  it('rejects unwired non-subject roles in 0.1.0', () => {
+  it('accepts a provider impl (now wired)', () => {
     expect(() =>
       definePlugin({
         kind: PluginKind.Provider,
@@ -231,7 +231,14 @@ describe('definePlugin', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         impl: { run: async () => ({}) as any } as never,
       }),
-    ).toThrow(/not yet wired/);
+    ).not.toThrow();
+  });
+
+  it('rejects a provider impl missing run()', () => {
+    expect(() =>
+      // @ts-expect-error - intentionally invalid for the test
+      definePlugin({ kind: PluginKind.Provider, name: 'p', version: '0.1.0', description: 'd', impl: {} }),
+    ).toThrow(/run/);
   });
 
   it('rejects subject_backend without list/get', () => {
@@ -303,7 +310,7 @@ describe('definePlugin', () => {
 
     expect(frames).toHaveLength(3);
     expect(frames[0]?.id).toBe(1);
-    expect((frames[0]?.result as { protocol_version: string }).protocol_version).toBe('1.0.0');
+    expect((frames[0]?.result as { protocol_version: string }).protocol_version).toBe(PROTOCOL_VERSION);
     expect(frames[1]?.id).toBe(2);
     const listResult = frames[1]?.result as { subjects: unknown[]; fetched_at: string };
     expect(listResult.subjects).toHaveLength(1);

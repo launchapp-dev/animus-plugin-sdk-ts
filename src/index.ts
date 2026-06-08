@@ -1,21 +1,18 @@
-// Public API surface for `@launchapp-dev/animus-plugin-sdk`.
+// Base / runtime / definePlugin entrypoint for `@launchapp-dev/animus-plugin-sdk`.
 //
-// We re-export only the entrypoints plugin authors should reach for. The
-// internal wire protocol helpers are also exported for advanced/test use, but
-// are documented as low-level.
+// This is the back-compat `.` export: everything plugin authors reached for
+// before still lives here. Role-specific generated Zod types + contracts are
+// ALSO published as subpath exports (`@launchapp-dev/animus-plugin-sdk/subject`,
+// `/provider`, `/trigger`, …) — see package.json `exports`.
 
 // --- top-level author entrypoint ---
 export { definePlugin } from './plugin.js';
 export type { PluginSpec, PluginHandle } from './plugin.js';
 
-// --- role contracts ---
+// --- role contracts (back-compat surface) ---
 export type {
   CallContext,
   HealthReport,
-  LogStorageBackend,
-  Provider,
-  ProviderRunParams,
-  ProviderRunResult,
   Subject,
   SubjectBackend,
   SubjectCallContext,
@@ -24,9 +21,21 @@ export type {
   SubjectListResult,
   SubjectPatch,
   SubjectStatus,
-  TransportBackend,
   TriggerBackend,
   TriggerEvent,
+  TriggerSchema,
+  Provider,
+  ProviderCallContext,
+  AgentStream,
+  ProviderRunParams,
+  ProviderRunResult,
+  TransportBackend,
+  LogStorageBackend,
+  Queue,
+  WorkflowRunner,
+  DurableStore,
+  MemoryStore,
+  Notifier,
 } from './roles.js';
 
 // --- handshake helpers (rarely needed directly) ---
@@ -38,11 +47,7 @@ export { createWire, encodeFrame, errorResponse, okResponse, parseFrame } from '
 export type { FrameHandler, Wire, WireOptions } from './wire.js';
 
 // --- protocol constants & shared types ---
-export {
-  ErrorCode,
-  PluginKind,
-  PROTOCOL_VERSION,
-} from './types/index.js';
+export { ErrorCode, PluginKind, PROTOCOL_VERSION } from './types/index.js';
 export type {
   EnvRequirement,
   HealthCheckResult,
@@ -51,6 +56,7 @@ export type {
   HostInfo,
   InitializeParams,
   InitializeResult,
+  KindCapability,
   McpTool,
   PluginCapabilities,
   PluginInfo,

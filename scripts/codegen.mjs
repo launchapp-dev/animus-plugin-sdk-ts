@@ -1,236 +1,340 @@
 #!/usr/bin/env node
-// Code-generates TypeScript types from the Rust-emitted JSON Schemas in
-// schemas/animus-{plugin,subject}-protocol/_all.json.
+// Code-generates **Zod schemas** from the Rust-emitted JSON Schema bundles in
+// schemas/<crate>/_all.json. The Rust protocol crates are the single source of
+// truth; this emitter is deterministic and re-runnable (the drift check
+// regenerates into a temp dir and diffs).
 //
-// Strategy: feed each $defs entry to json-schema-to-typescript individually
-// (with sibling $defs hoisted so cross-refs resolve), then concatenate.
-// Compiling the bundle as a single document causes j-s-t-s to emit some
-// types twice (once for the inline $ref usage, once for the $defs entry)
-// with numeric suffixes (HealthStatus / HealthStatus1). The per-def loop
-// avoids that and produces one named export per Rust type.
+// Output: one module per protocol crate under src/types/generated/<crate>.ts,
+// each exporting `export const XSchema = z.object({...})` plus
+// `export type X = z.infer<typeof XSchema>` for every $def in that bundle.
 //
-// Post-processing: open-string enums on the Rust side (PluginKind,
-// TriggerActionHint, TriggerAckStatus — all have an `Other(String)`
-// variant that flattens to `string` on the wire) are widened from
-// `string` to `"known1" | "known2" | ... | (string & {})` so downstream
-// code gets autocomplete on the known values while still accepting
-// unknown values for forward-compat. PluginKind is also injected because
-// it does not appear in the schema bundle at all (its values come from
-// `PLUGIN_KIND_*` constants in animus-plugin-protocol).
+// Design notes:
+//   - $refs resolve to the sibling `<Name>Schema` const within the same module
+//     (all defs in a bundle live in one file). Forward references are handled
+//     via `z.lazy(() => NameSchema)` only when a def is used before it is
+//     declared; we topologically emit and fall back to lazy for cycles.
+//   - Open-string enums on the Rust side (PluginKind, TriggerActionHint,
+//     TriggerAckStatus) flatten an `Other(String)` variant to `string` on the
+//     wire. They are widened to a literal-union the schema accepts plus any
+//     string, so authors get autocomplete while unknown values still validate.
+//   - Schemaless fields (no type/$ref/oneOf/anyOf) — the JSON-RPC envelope
+//     fields `params`/`result`/`payload`/`data`/`id`/`input_schema` — emit
+//     `z.unknown()` so they stay permissive (never reject a valid frame).
+//   - Name collisions are avoided: each $def emits exactly one `<Name>Schema`.
 
-import { compile } from "json-schema-to-typescript";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
-// Output dir is overridable so the drift check can target a staging
-// directory without copying the script outside its node_modules.
+const schemasRoot = resolve(repoRoot, "schemas");
+// Output dir is overridable so the drift check can target a staging directory.
 const outDir = process.env.ANIMUS_CODEGEN_OUT_DIR
   ? resolve(process.env.ANIMUS_CODEGEN_OUT_DIR)
-  : resolve(__dirname, "../src/types");
+  : resolve(repoRoot, "src/types/generated");
 
-const bundles = [
-  {
-    source: "schemas/animus-plugin-protocol/_all.json",
-    outFile: "plugin-protocol.ts",
-  },
-  {
-    source: "schemas/animus-subject-protocol/_all.json",
-    outFile: "subject-protocol.ts",
-  },
-];
+// Crate -> module file name (kebab-case of the crate, dropping the `animus-`
+// prefix and `-protocol` suffix). Discovered from the schemas/ directory so a
+// new vendored bundle is picked up automatically.
+function moduleNameForCrate(crate) {
+  return crate.replace(/^animus-/, "").replace(/-protocol$/, "");
+}
 
-// Open-string enum vocabularies derived from
-// crates/animus-plugin-protocol/src/lib.rs PLUGIN_KIND_*,
-// TriggerActionHint::*, TriggerAckStatus::* constants. Keep in sync
-// when a new variant is added on the Rust side.
-const openEnums = {
+// Open-string enum vocabularies. Mirrors the Rust `PLUGIN_KIND_*`,
+// `TriggerActionHint::*`, `TriggerAckStatus::*` constants. Each of these Rust
+// types has an `Other(String)` variant that flattens to a bare `string` on the
+// wire, so the generated schema accepts the known literals OR any other string.
+const OPEN_ENUMS = {
   PluginKind: [
     "provider",
     "subject_backend",
     "task_backend",
     "trigger_backend",
     "log_storage_backend",
+    "transport_backend",
+    "workflow_runner",
+    "queue",
+    "durable_store",
+    "memory_store",
+    "notifier",
+    "web_ui",
     "custom",
   ],
   TriggerActionHint: ["create_task", "run_workflow"],
-  TriggerAckStatus: [
-    "dispatched",
-    "queued",
-    "unmatched",
-    "skipped",
-    "failed",
-    "shutdown",
-  ],
+  TriggerAckStatus: ["dispatched", "queued", "unmatched", "skipped", "failed", "shutdown"],
 };
 
-function openEnumUnion(name) {
-  const values = openEnums[name];
-  const literals = values.map((v) => `"${v}"`).join(" | ");
-  // `string & {}` keeps autocomplete on the known literals while still
-  // accepting arbitrary strings for forward-compat with Rust's `Other(String)`.
-  return `${literals} | (string & {})`;
+function indent(s, n) {
+  const pad = "  ".repeat(n);
+  return s
+    .split("\n")
+    .map((l) => (l.length ? pad + l : l))
+    .join("\n");
 }
 
-async function compileBundle({ source, outFile }) {
-  const bundlePath = resolve(repoRoot, source);
+// Render a Zod expression for an arbitrary JSON-Schema node. `refName` is
+// resolved against the set of defs in the current bundle.
+function renderNode(node, ctx) {
+  if (node === true || node === undefined) return "z.unknown()";
+  if (node === false) return "z.never()";
+
+  // $ref → sibling schema const (possibly lazy for forward/cyclic refs).
+  if (node.$ref) {
+    const refName = node.$ref.replace("#/$defs/", "");
+    return ctx.refExpr(refName);
+  }
+
+  // oneOf / anyOf → union. (Internally-tagged Rust enums emit oneOf of objects;
+  // nullable refs emit anyOf of [ref, null].)
+  const variants = node.oneOf ?? node.anyOf;
+  if (Array.isArray(variants)) {
+    if (variants.length === 1) return renderNode(variants[0], ctx);
+    // oneOf of `{const: "x", type: "string"}` is a closed string enum.
+    if (variants.every((v) => typeof v.const === "string" && (v.type === "string" || v.type === undefined))) {
+      const lits = variants.map((v) => JSON.stringify(v.const));
+      return `z.enum([${lits.join(", ")}])`;
+    }
+    const rendered = variants.map((v) => renderNode(v, ctx));
+    return `z.union([${rendered.join(", ")}])`;
+  }
+
+  if (node.const !== undefined) {
+    return `z.literal(${JSON.stringify(node.const)})`;
+  }
+
+  if (Array.isArray(node.enum)) {
+    if (node.enum.every((v) => typeof v === "string")) {
+      return `z.enum([${node.enum.map((v) => JSON.stringify(v)).join(", ")}])`;
+    }
+    return `z.union([${node.enum.map((v) => `z.literal(${JSON.stringify(v)})`).join(", ")}])`;
+  }
+
+  // `type` may be a string, or an array including "null" (nullable).
+  let type = node.type;
+  if (Array.isArray(type)) {
+    const nonNull = type.filter((t) => t !== "null");
+    const hasNull = type.includes("null");
+    if (nonNull.length === 0) return "z.null()";
+    const inner = renderNode({ ...node, type: nonNull.length === 1 ? nonNull[0] : nonNull }, ctx);
+    return hasNull ? `${inner}.nullable()` : inner;
+  }
+
+  switch (type) {
+    case "string":
+      if (node.format === "date-time") return "z.string().datetime({ offset: true })";
+      return "z.string()";
+    case "integer":
+      return applyNumericBounds("z.number().int()", node);
+    case "number":
+      return applyNumericBounds("z.number()", node);
+    case "boolean":
+      return "z.boolean()";
+    case "null":
+      return "z.null()";
+    case "array": {
+      const item = node.items ? renderNode(node.items, ctx) : "z.unknown()";
+      return `z.array(${item})`;
+    }
+    case "object": {
+      // Map type: additionalProperties is a schema (not bool).
+      if (node.additionalProperties && typeof node.additionalProperties === "object") {
+        const val = renderNode(node.additionalProperties, ctx);
+        return `z.record(z.string(), ${val})`;
+      }
+      // Free-form object with no declared properties → permissive record.
+      if (!node.properties || Object.keys(node.properties).length === 0) {
+        return "z.record(z.string(), z.unknown())";
+      }
+      return renderObject(node, ctx);
+    }
+    default:
+      // No type, no $ref, no union → schemaless. Keep permissive: this is how
+      // the JSON-RPC envelope fields (params/result/payload/data/id/
+      // input_schema) and Rust `serde_json::Value` fields appear.
+      return "z.unknown()";
+  }
+}
+
+// Translate JSON-Schema numeric constraints (`minimum`/`maximum`) and unsigned
+// integer formats (`uint`, `uint8`, ...) into Zod refinements so the generated
+// validators stay faithful to the Rust source-of-truth schemas.
+function applyNumericBounds(base, node) {
+  let out = base;
+  const isUnsigned = typeof node.format === "string" && node.format.startsWith("uint");
+  if (typeof node.minimum === "number") {
+    out += `.min(${node.minimum})`;
+  } else if (isUnsigned) {
+    out += `.min(0)`;
+  }
+  if (typeof node.maximum === "number") {
+    out += `.max(${node.maximum})`;
+  }
+  return out;
+}
+
+function renderObject(node, ctx) {
+  const props = node.properties ?? {};
+  const required = new Set(node.required ?? []);
+  const keys = Object.keys(props); // preserve schema order (deterministic)
+  const lines = [];
+  for (const key of keys) {
+    let expr = renderNode(props[key], ctx);
+    if (!required.has(key)) expr = `${expr}.optional()`;
+    lines.push(`${JSON.stringify(key)}: ${expr},`);
+  }
+  const body = lines.join("\n");
+  let obj = `z.object({\n${indent(body, 1)}\n})`;
+  // Allow unknown extra keys (forward-compat with newer hosts/minors).
+  obj = `${obj}.passthrough()`;
+  return obj;
+}
+
+// Collect the direct $ref dependencies of a def so we can topologically sort.
+function collectRefs(node, acc) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const n of node) collectRefs(n, acc);
+    return;
+  }
+  if (typeof node.$ref === "string") {
+    acc.add(node.$ref.replace("#/$defs/", ""));
+  }
+  for (const k of Object.keys(node)) {
+    if (k === "$ref") continue;
+    collectRefs(node[k], acc);
+  }
+}
+
+function compileBundle(crate) {
+  const bundlePath = resolve(schemasRoot, crate, "_all.json");
   const bundle = JSON.parse(readFileSync(bundlePath, "utf8"));
   const defs = bundle.$defs ?? {};
   const names = Object.keys(defs).sort();
 
-  const parts = [];
+  // Build dependency graph for a deterministic topo order; cycles fall back to
+  // z.lazy. `declared` tracks which schema consts have been emitted already so
+  // refExpr can decide between a direct reference and a lazy one.
+  const deps = new Map();
   for (const name of names) {
-    const schema = {
-      $schema: bundle.$schema,
-      title: name,
-      ...defs[name],
-      // Hoist sibling $defs so cross-`$ref`s resolve. We set
-      // `declareExternallyReferenced: false` so sibling types are NOT
-      // re-emitted by this iteration — each name gets exactly one
-      // emission across the whole bundle.
-      $defs: defs,
-    };
-    const ts = await compile(schema, name, {
-      bannerComment: "",
-      additionalProperties: false,
-      declareExternallyReferenced: false,
-      unreachableDefinitions: false,
-      strictIndexSignatures: false,
-      style: { singleQuote: false, semi: true },
-    });
-    parts.push(ts.trim());
+    const acc = new Set();
+    collectRefs(defs[name], acc);
+    acc.delete(name); // ignore self-ref for ordering
+    deps.set(name, [...acc].filter((d) => names.includes(d)).sort());
   }
 
-  let body = parts.join("\n\n") + "\n";
-
-  // Normalize j-s-t-s name-collision suffixes back to the base name.
-  // When a $ref has a sibling `description` the compiler treats it as a
-  // derivative type and appends `1`, `2`, ... to avoid the collision —
-  // but each base name in our $defs loop is already emitted exactly once,
-  // so the suffixed reference is always equivalent to the base. Without
-  // this pass, `Subject.id` ends up typed as `SubjectId1`, which is
-  // never declared anywhere and breaks `tsc`.
-  const declaredNames = new Set(names);
-  for (const name of declaredNames) {
-    const suffixed = new RegExp(`\\b${name}\\d+\\b`, "g");
-    body = body.replace(suffixed, name);
-  }
-
-  // Replace open-string enums with widened unions. The base schema
-  // emits `export type X = string;`; we swap to a literal-union form.
-  for (const name of Object.keys(openEnums)) {
-    const re = new RegExp(`export type ${name} = string;`);
-    if (re.test(body)) {
-      body = body.replace(re, `export type ${name} = ${openEnumUnion(name)};`);
+  // Kahn-ish topo sort (deterministic by sorted name order).
+  const ordered = [];
+  const emitted = new Set();
+  const visiting = new Set();
+  function visit(name) {
+    if (emitted.has(name)) return;
+    if (visiting.has(name)) return; // cycle; will be lazy-referenced
+    visiting.add(name);
+    for (const d of deps.get(name) ?? []) visit(d);
+    visiting.delete(name);
+    if (!emitted.has(name)) {
+      emitted.add(name);
+      ordered.push(name);
     }
   }
+  for (const name of names) visit(name);
 
-  // Wire fields that semantically hold an open-enum value but were
-  // declared as plain `string` in the schema (because the Rust side uses
-  // `#[schemars(with = "String")]` for forward-compat) to the typed
-  // union. The mapping is by field name and is intentionally narrow —
-  // we only touch fields the host actually populates with these values.
-  const fieldEnumMap = {
-    plugin_kind: "PluginKind",
-  };
-  for (const [field, typeName] of Object.entries(fieldEnumMap)) {
-    if (!source.includes("plugin-protocol")) continue;
-    const re = new RegExp(`(\\b${field}: )string;`, "g");
-    body = body.replace(re, `$1${typeName};`);
-  }
+  const declared = new Set();
+  const chunks = [];
+  for (const name of ordered) {
+    const ctx = {
+      refExpr: (refName) => {
+        const schemaConst = `${refName}Schema`;
+        // Forward reference (not yet declared) or self-reference → lazy.
+        if (refName === name || !declared.has(refName)) {
+          return `z.lazy(() => ${schemaConst})`;
+        }
+        return schemaConst;
+      },
+    };
 
-  // Widen JSON-RPC envelope fields that the Rust side declares as
-  // `serde_json::Value` (no type constraint in the schema) but j-s-t-s
-  // falls back to rendering as `{ [k: string]: unknown }`. That object
-  // shape rejects valid JSON-RPC ids (`1`, `"abc"`, `null`) and forces
-  // consumers to cast every plain `result`/`params`/`payload`.
-  //
-  // The mapping is keyed by (interface, field) so we don't accidentally
-  // rewrite an unrelated `id` field on another type.
-  const widenFields = [
-    // [interface, field, replacement type]
-    ["RpcRequest", "id", "string | number | null"],
-    ["RpcRequest", "params", "unknown"],
-    ["RpcResponse", "id", "string | number | null"],
-    ["RpcResponse", "result", "unknown"],
-    ["RpcNotification", "params", "unknown"],
-    ["RpcError", "data", "unknown"],
-    ["McpTool", "input_schema", "unknown"],
-    ["TriggerEvent", "payload", "unknown"],
-    ["TriggerWatchParams", "config", "unknown"],
-    ["TriggerWatchParams", "cursor", "unknown"],
-  ];
-  for (const [iface, field, repl] of widenFields) {
-    if (!source.includes("plugin-protocol")) continue;
-    // Match `export interface IFACE { ... <field>?: { [k:string]:unknown };`
-    // scoped to the interface body so we don't accidentally rewrite
-    // a similarly-named field on another interface.
-    const ifaceRe = new RegExp(
-      String.raw`(export interface ${iface}\b[\s\S]*?\n  ${field}\??: )\{\s*\[k: string\]: unknown;\s*\};`,
+    // Open-string enums: emit the widened union regardless of how schemars
+    // rendered them, so authors get autocomplete + forward-compat.
+    let expr;
+    if (OPEN_ENUMS[name]) {
+      const lits = OPEN_ENUMS[name].map((v) => `z.literal(${JSON.stringify(v)})`);
+      // `z.string()` last keeps the union open to unknown wire values.
+      expr = `z.union([${lits.join(", ")}, z.string()])`;
+    } else {
+      expr = renderNode(defs[name], ctx);
+    }
+
+    declared.add(name);
+    chunks.push(
+      `export const ${name}Schema = ${expr};\n` +
+        `export type ${name} = z.infer<typeof ${name}Schema>;`,
     );
-    body = body.replace(ifaceRe, `$1${repl};`);
-  }
-
-  // PluginKind is not declared as a $def in the schema (it is referenced
-  // only by free-form prose on PluginInfo.plugin_kind / PluginManifest.plugin_kind).
-  // Inject it so SDK consumers can `import type { PluginKind }`.
-  if (source.includes("plugin-protocol") && !/export type PluginKind\b/.test(body)) {
-    const pluginKindDecl = [
-      "/**",
-      " * Discriminant identifying the role a plugin plays in the host.",
-      " *",
-      " * Wire representation is the snake_case string in the inner literal",
-      " * union; unknown values round-trip as `string` to preserve forward-",
-      " * compat with hosts that introduce new kinds.",
-      " *",
-      " * Mirrors the `PLUGIN_KIND_*` constants in",
-      " * `crates/animus-plugin-protocol/src/lib.rs`.",
-      " */",
-      `export type PluginKind = ${openEnumUnion("PluginKind")};`,
-      "",
-    ].join("\n");
-    body = pluginKindDecl + body;
   }
 
   const banner = [
-    `// AUTO-GENERATED FROM ../../../${source} — DO NOT EDIT BY HAND.`,
+    `// AUTO-GENERATED FROM schemas/${crate}/_all.json — DO NOT EDIT BY HAND.`,
     `// Regenerate via: pnpm run codegen`,
+    `import { z } from "zod";`,
     "",
     "",
   ].join("\n");
 
-  return { outFile, content: banner + body, typeCount: names.length };
+  return {
+    module: moduleNameForCrate(crate),
+    content: banner + chunks.join("\n\n") + "\n",
+    typeCount: names.length,
+  };
 }
 
-async function main() {
+function discoverCrates() {
+  return readdirSync(schemasRoot, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter((name) => {
+      try {
+        readFileSync(resolve(schemasRoot, name, "_all.json"));
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+}
+
+function main() {
   mkdirSync(outDir, { recursive: true });
+  const crates = discoverCrates();
   const results = [];
-  for (const bundle of bundles) {
-    const result = await compileBundle(bundle);
-    const outPath = resolve(outDir, result.outFile);
+  for (const crate of crates) {
+    const result = compileBundle(crate);
+    const outPath = resolve(outDir, `${result.module}.ts`);
     writeFileSync(outPath, result.content);
     results.push({ ...result, outPath });
-    console.log(`wrote ${outPath} (${result.typeCount} types)`);
+    if (!process.env.ANIMUS_CODEGEN_OUT_DIR) {
+      console.log(`wrote ${basename(outPath)} (${result.typeCount} types)`);
+    }
   }
 
-  // Barrel re-export. Use .js suffix on imports so the emitted ESM works
-  // with NodeNext module resolution.
-  const barrel = [
+  // index barrel re-exporting every generated module (namespaced to avoid
+  // cross-crate name collisions like SubjectId / SubjectDispatch).
+  const barrelLines = [
     "// AUTO-GENERATED — DO NOT EDIT BY HAND.",
     "// Regenerate via: pnpm run codegen",
     "",
-    `export * from "./plugin-protocol.js";`,
-    `export * from "./subject-protocol.js";`,
-    "",
-  ].join("\n");
-  const barrelPath = resolve(outDir, "generated.ts");
-  writeFileSync(barrelPath, barrel);
-  console.log(`wrote ${barrelPath} (barrel)`);
+  ];
+  for (const r of results) {
+    barrelLines.push(`export * as ${camel(r.module)} from "./${r.module}.js";`);
+  }
+  barrelLines.push("");
+  writeFileSync(resolve(outDir, "index.ts"), barrelLines.join("\n"));
+  if (!process.env.ANIMUS_CODEGEN_OUT_DIR) {
+    console.log(`wrote index.ts (barrel, ${results.length} modules)`);
+  }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function camel(kebab) {
+  return kebab.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+main();

@@ -1,21 +1,59 @@
-// TODO(T2): replace this file with auto-generated `./generated.ts` derived from
-// `schemas/animus-{plugin,subject}-protocol/*.json`. These hand-typed stubs are
-// the minimal subset needed for the skeleton to compile; they intentionally
-// mirror the Rust source-of-truth in
-// `crates/animus-plugin-protocol/src/lib.rs` so swap-in is non-breaking.
+// Base/runtime protocol layer. The wire-shape types are re-exported from the
+// generated Zod modules (Rust is the source of truth — regenerate via
+// `pnpm run codegen`). This module adds the hand-maintained constants
+// (PROTOCOL_VERSION, PluginKind, ErrorCode) and the JSON-RPC id alias that the
+// transport relies on, none of which live in the schema bundles.
 
-/** Protocol version this SDK was built against. Bump when the Rust constant moves. */
-export const PROTOCOL_VERSION = '1.0.0' as const;
+import {
+  type EnvRequirement,
+  type HealthCheckResult,
+  type HealthStatus,
+  type HostCapabilities,
+  type HostInfo,
+  type InitializeParams,
+  type InitializeResult,
+  type KindCapability,
+  type McpTool,
+  type PluginCapabilities,
+  type PluginInfo,
+  type PluginManifest,
+  type RpcError,
+} from './generated/plugin.js';
 
-/** Plugin kind discriminator strings (mirror `PLUGIN_KIND_*` constants). */
+export type {
+  EnvRequirement,
+  HealthCheckResult,
+  HealthStatus,
+  HostCapabilities,
+  HostInfo,
+  InitializeParams,
+  InitializeResult,
+  KindCapability,
+  McpTool,
+  PluginCapabilities,
+  PluginInfo,
+  PluginManifest,
+  RpcError,
+};
+
+/** Protocol version this SDK was built against. Mirrors the Rust
+ *  `PROTOCOL_VERSION` constant in `animus-plugin-protocol`. */
+export const PROTOCOL_VERSION = '1.1.0' as const;
+
+/** Plugin kind discriminator strings (mirror the `PLUGIN_KIND_*` constants). */
 export const PluginKind = {
   Provider: 'provider',
   SubjectBackend: 'subject_backend',
   TaskBackend: 'task_backend',
   TriggerBackend: 'trigger_backend',
   LogStorageBackend: 'log_storage_backend',
-  /** Not yet a first-class Rust enum variant; treated as `custom` over the wire. */
   TransportBackend: 'transport_backend',
+  // v1.1.0 additive kinds.
+  WorkflowRunner: 'workflow_runner',
+  Queue: 'queue',
+  DurableStore: 'durable_store',
+  MemoryStore: 'memory_store',
+  Notifier: 'notifier',
   Custom: 'custom',
 } as const;
 export type PluginKindString = (typeof PluginKind)[keyof typeof PluginKind];
@@ -23,29 +61,22 @@ export type PluginKindString = (typeof PluginKind)[keyof typeof PluginKind];
 /** JSON-RPC 2.0 request id; per spec a string, number, or null. */
 export type RpcId = string | number | null;
 
-// TODO(T2): replace with generated.RpcRequest
+// The JSON-RPC envelopes are transport contracts, not domain payloads, so we
+// define them explicitly here (the generated `RpcRequest`/`RpcResponse` schemas
+// from the bundle are intentionally permissive via `.passthrough()`, which
+// erases the field types behind an index signature). The structural shape
+// matches the generated schema exactly; only `id` is narrowed to `RpcId`.
 export interface RpcRequest {
   jsonrpc: '2.0';
   method: string;
   id?: RpcId;
   params?: unknown;
 }
-
-// TODO(T2): replace with generated.RpcNotification
 export interface RpcNotification {
   jsonrpc: '2.0';
   method: string;
   params?: unknown;
 }
-
-// TODO(T2): replace with generated.RpcError
-export interface RpcError {
-  code: number;
-  message: string;
-  data?: unknown;
-}
-
-// TODO(T2): replace with generated.RpcResponse
 export interface RpcResponse {
   jsonrpc: '2.0';
   id: RpcId;
@@ -53,95 +84,21 @@ export interface RpcResponse {
   error?: RpcError | null;
 }
 
-// TODO(T2): replace with generated.EnvRequirement
-export interface EnvRequirement {
-  name: string;
-  description?: string | null;
-  required?: boolean;
-  sensitive?: boolean;
-}
-
-// TODO(T2): replace with generated.PluginManifest
-export interface PluginManifest {
-  name: string;
-  version: string;
-  plugin_kind: PluginKindString | string;
-  description: string;
-  protocol_version: string;
-  capabilities?: string[];
-  env_required?: EnvRequirement[];
-  notification_buffer_size?: number | null;
-}
-
-// TODO(T2): replace with generated.PluginInfo
-export interface PluginInfo {
-  name: string;
-  version: string;
-  plugin_kind: PluginKindString | string;
-  description?: string | null;
-}
-
-// TODO(T2): replace with generated.McpTool
-export interface McpTool {
-  name: string;
-  description?: string | null;
-  input_schema?: unknown;
-}
-
-// TODO(T2): replace with generated.PluginCapabilities
-export interface PluginCapabilities {
-  methods?: string[];
-  streaming?: boolean;
-  progress?: boolean;
-  cancellation?: boolean;
-  projections?: string[];
-  subject_kinds?: string[];
-  mcp_tools?: McpTool[];
-}
-
-// TODO(T2): replace with generated.HostCapabilities
-export interface HostCapabilities {
-  streaming?: boolean;
-  progress?: boolean;
-  cancellation?: boolean;
-}
-
-// TODO(T2): replace with generated.HostInfo
-export interface HostInfo {
-  name: string;
-  version: string;
-}
-
-// TODO(T2): replace with generated.InitializeParams
-export interface InitializeParams {
-  protocol_version: string;
-  host_info: HostInfo;
-  capabilities: HostCapabilities;
-}
-
-// TODO(T2): replace with generated.InitializeResult
-export interface InitializeResult {
-  protocol_version: string;
-  plugin_info: PluginInfo;
-  capabilities: PluginCapabilities;
-}
-
-// TODO(T2): replace with generated.HealthCheckResult / HealthStatus
-export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy';
-export interface HealthCheckResult {
-  status: HealthStatus;
-  uptime_ms?: number | null;
-  memory_usage_bytes?: number | null;
-  last_error?: string | null;
-}
-
-/** JSON-RPC 2.0 standard + Animus-specific error codes. */
+/** JSON-RPC 2.0 standard + Animus-specific error codes (spec §4). */
 export const ErrorCode = {
   ParseError: -32700,
   InvalidRequest: -32600,
   MethodNotFound: -32601,
   InvalidParams: -32602,
   InternalError: -32603,
+  /** Domain method received before `initialize` completed. */
+  PluginNotInitialized: -32000,
+  /** Method is recognized but not implemented (host should fall back). */
+  MethodNotSupported: -32001,
+  /** Host cancelled the request via `$/cancelRequest`. */
+  RequestCancelled: -32002,
+  /** Request did not complete within the host-imposed timeout. */
+  Timeout: -32003,
   /** Animus-specific: plugin shutting down. */
   ServerShutdown: -32099,
 } as const;

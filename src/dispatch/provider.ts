@@ -245,14 +245,14 @@ export function dispatchProvider(
       const resume = impl.resume.bind(impl);
       const v = validateParams(id, AgentRunRequestSchema, frame.params);
       if (!v.ok) return v.response;
-      // TODO(codex-p2): `agent/resume` shares `AgentRunRequestSchema` with
-      // `agent/run`, so a resume that omits `session_id` is accepted and the
-      // impl is handed an empty id. Spec §7.2 says resume carries `session_id`
-      // "set". Rejecting an unset id here is a pre-existing behavior change
-      // orthogonal to the concurrency fix and could regress lenient providers /
-      // conformance fixtures, so it is deferred to a focused follow-up rather
-      // than bundled into this change.
-      runDetached(id, wire, registry, (ctx) => resume(v.value, ctx), v.value.session_id ?? '');
+      // Spec §7.2: `agent/resume` "Resumes a prior session ... with `session_id`
+      // set." A resume without a session id has nothing to resume, so reject it
+      // up front rather than handing the impl an empty id.
+      const resumeSid = v.value.session_id;
+      if (typeof resumeSid !== 'string' || resumeSid.length === 0) {
+        return errorResponse(id, ErrorCode.InvalidParams, 'agent/resume requires a non-empty session_id');
+      }
+      runDetached(id, wire, registry, (ctx) => resume(v.value, ctx), resumeSid);
       return undefined; // detached; final response sent later via wire.sendResponse
     }
     case PROVIDER_METHODS.cancel: {

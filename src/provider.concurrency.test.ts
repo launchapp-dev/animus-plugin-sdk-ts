@@ -219,4 +219,24 @@ describe('provider concurrency', () => {
     const frames = h.frames();
     expect(frames.find((f) => f.id === 40)).toBeDefined();
   });
+
+  it('rejects agent/resume with a missing session_id (invalid_params, impl not called)', async () => {
+    let resumeCalled = false;
+    const provider: Provider = {
+      run: () => finalResponse('sess-x') as never,
+      resume: () => {
+        resumeCalled = true;
+        return finalResponse('sess-x') as never;
+      },
+    };
+    const h = startProvider(provider);
+    // agent/resume with no session_id in params — nothing to resume.
+    write(h.input, { jsonrpc: '2.0', id: 50, method: 'agent/resume', params: { cwd: '/tmp', prompt: 'hi' } });
+    h.input.end();
+    await h.done;
+
+    const reply = h.frames().find((f) => f.id === 50);
+    expect(reply?.error?.code).toBe(ErrorCode.InvalidParams);
+    expect(resumeCalled).toBe(false);
+  });
 });

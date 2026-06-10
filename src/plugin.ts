@@ -230,16 +230,19 @@ export function definePlugin(spec: PluginSpec): PluginHandle {
   };
   const capabilities = deriveCapabilities(spec);
 
+  const methodCaps = capabilities.methods ?? [];
+  const advertised: string[] = [];
+  if (spec.kind === PluginKind.TransportBackend && spec.capabilities) advertised.push(...spec.capabilities);
+  if (spec.extra_capabilities) advertised.push(...spec.extra_capabilities);
+  for (const c of advertised) {
+    if (!methodCaps.includes(c)) methodCaps.push(c);
+  }
+  capabilities.methods = methodCaps;
+
   // Manifest-only capability tokens that aid host preflight without spawning.
   const extraCaps: string[] = [];
   if (spec.kind === PluginKind.SubjectBackend && spec.subject_kinds) {
     for (const k of spec.subject_kinds) extraCaps.push(`subject_kind:${k}`);
-  }
-  if (spec.kind === PluginKind.TransportBackend && spec.capabilities) {
-    for (const c of spec.capabilities) extraCaps.push(c);
-  }
-  if (spec.extra_capabilities) {
-    for (const c of spec.extra_capabilities) extraCaps.push(c);
   }
 
   // v1.1.0: advertise the per-kind protocol crate version via kind_capabilities
@@ -340,6 +343,10 @@ async function dispatch(
       setImmediate(() => process.exit(0));
       return undefined;
     }
+    if (method === 'trigger/ack' && spec.kind === PluginKind.TriggerBackend) {
+      void dispatchTrigger(null, frame, wire, spec.impl);
+      return undefined;
+    }
     // `$/cancelRequest` (spec §6.3): for a provider, best-effort cancel the
     // in-flight run started by that request id. The detached run then resolves
     // with `-32002` (request_cancelled). For other roles this is a no-op. We
@@ -368,9 +375,12 @@ async function dispatch(
       return handleHealth(id, spec);
     case 'shutdown':
       return okResponse(id, {});
-    case 'exit':
-      setImmediate(() => process.exit(0));
-      return okResponse(id, {});
+    case 'exit': {
+      // Flush the reply before terminating; exiting on a timer races the
+      // stdout write queue and can truncate the response frame.
+      void wire.sendResponse(okResponse(id, {})).finally(() => process.exit(0));
+      return undefined;
+    }
     default:
       return dispatchRole(id, frame, wire, spec, providerSessions);
   }

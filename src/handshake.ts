@@ -44,6 +44,11 @@ export function buildManifest(
     env_required?: PluginManifest['env_required'];
     notification_buffer_size?: number | null;
     extra_capabilities?: string[];
+    /** Additional kinds this ONE process also serves (v0.7 multi-kind).
+     *  `plugin_kind` stays the primary; a multi-kind-aware host registers the
+     *  process under every kind in the union. Empty → single-kind (back-compat,
+     *  field omitted from the wire). */
+    plugin_kinds?: string[];
   } = {},
 ): PluginManifest {
   const methods = capabilities.methods ?? [];
@@ -57,7 +62,7 @@ export function buildManifest(
       merged.push(c);
     }
   }
-  return {
+  const manifest: PluginManifest = {
     name: identity.name,
     version: identity.version,
     plugin_kind: identity.plugin_kind,
@@ -67,6 +72,24 @@ export function buildManifest(
     env_required: options.env_required ?? [],
     notification_buffer_size: options.notification_buffer_size ?? null,
   };
+  const kinds = dedupeKinds(identity.plugin_kind, options.plugin_kinds);
+  if (kinds.length > 0) manifest.plugin_kinds = kinds;
+  return manifest;
+}
+
+/** Return the additional `plugin_kinds` (excluding the primary), deduped and in
+ *  order. Empty when the plugin serves a single kind. */
+function dedupeKinds(primary: string, extra?: string[]): string[] {
+  if (!extra || extra.length === 0) return [];
+  const seen = new Set<string>([primary]);
+  const out: string[] = [];
+  for (const k of extra) {
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(k);
+    }
+  }
+  return out;
 }
 
 /** Build the `initialize` reply payload.
@@ -78,6 +101,7 @@ export function buildInitializeResult(
   identity: PluginIdentity,
   capabilities: PluginCapabilities,
   kindCapabilities?: Record<string, KindCapability>,
+  pluginKinds?: string[],
 ): InitializeResult {
   const plugin_info: PluginInfo = {
     name: identity.name,
@@ -85,6 +109,8 @@ export function buildInitializeResult(
     plugin_kind: identity.plugin_kind,
     description: identity.description,
   };
+  const kinds = dedupeKinds(identity.plugin_kind, pluginKinds);
+  if (kinds.length > 0) plugin_info.plugin_kinds = kinds;
   const result: InitializeResult = {
     protocol_version: PROTOCOL_VERSION,
     plugin_info,

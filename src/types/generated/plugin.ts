@@ -2,6 +2,140 @@
 // Regenerate via: pnpm run codegen
 import { z } from "zod";
 
+export const ChatMessageSchema = z.object({
+  "blocks": z.array(z.unknown()).optional(),
+  "content": z.string(),
+  "cost_usd": z.number().nullable().optional(),
+  "model": z.string().nullable().optional(),
+  "recorded_at": z.string(),
+  "role": z.string(),
+  "seq": z.number().int().min(0),
+  "tool": z.string().nullable().optional(),
+  "usage": z.unknown().optional(),
+}).passthrough();
+export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+
+export const ConversationAppendMessageRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "id": z.string(),
+  "message": ChatMessageSchema,
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationAppendMessageRequest = z.infer<typeof ConversationAppendMessageRequestSchema>;
+
+export const ConversationAppendMessageResponseSchema = z.record(z.string(), z.unknown());
+export type ConversationAppendMessageResponse = z.infer<typeof ConversationAppendMessageResponseSchema>;
+
+export const VisibilitySchema = z.enum(["private", "shared"]);
+export type Visibility = z.infer<typeof VisibilitySchema>;
+
+export const ConversationCreateRequestSchema = z.object({
+  "id": z.string().nullable().optional(),
+  "owner": z.string().nullable().optional(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "visibility": VisibilitySchema.optional(),
+}).passthrough();
+export type ConversationCreateRequest = z.infer<typeof ConversationCreateRequestSchema>;
+
+export const ConversationMetaSchema = z.object({
+  "created_at": z.string(),
+  "id": z.string(),
+  "message_count": z.number().int().min(0).optional(),
+  "model": z.string().nullable().optional(),
+  "owner": z.string().nullable().optional(),
+  "session_id": z.string().nullable().optional(),
+  "title": z.string().nullable().optional(),
+  "tool": z.string().nullable().optional(),
+  "updated_at": z.string(),
+  "visibility": VisibilitySchema.optional(),
+}).passthrough();
+export type ConversationMeta = z.infer<typeof ConversationMetaSchema>;
+
+export const ConversationCreateResponseSchema = z.object({
+  "meta": ConversationMetaSchema,
+}).passthrough();
+export type ConversationCreateResponse = z.infer<typeof ConversationCreateResponseSchema>;
+
+export const ConversationDeleteRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationDeleteRequest = z.infer<typeof ConversationDeleteRequestSchema>;
+
+export const ConversationDeleteResponseSchema = z.record(z.string(), z.unknown());
+export type ConversationDeleteResponse = z.infer<typeof ConversationDeleteResponseSchema>;
+
+export const ConversationListRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationListRequest = z.infer<typeof ConversationListRequestSchema>;
+
+export const ConversationSummarySchema = z.object({
+  "id": z.string(),
+  "message_count": z.number().int().min(0),
+  "model": z.string().nullable().optional(),
+  "owner": z.string().nullable().optional(),
+  "title": z.string().nullable().optional(),
+  "tool": z.string().nullable().optional(),
+  "updated_at": z.string(),
+  "visibility": VisibilitySchema.optional(),
+}).passthrough();
+export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
+
+export const ConversationListResponseSchema = z.object({
+  "conversations": z.array(ConversationSummarySchema).optional(),
+}).passthrough();
+export type ConversationListResponse = z.infer<typeof ConversationListResponseSchema>;
+
+export const ConversationLoadMessagesRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationLoadMessagesRequest = z.infer<typeof ConversationLoadMessagesRequestSchema>;
+
+export const ConversationLoadMessagesResponseSchema = z.object({
+  "messages": z.array(ChatMessageSchema).optional(),
+}).passthrough();
+export type ConversationLoadMessagesResponse = z.infer<typeof ConversationLoadMessagesResponseSchema>;
+
+export const ConversationLoadMetaRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationLoadMetaRequest = z.infer<typeof ConversationLoadMetaRequestSchema>;
+
+export const ConversationLoadMetaResponseSchema = z.object({
+  "meta": z.union([ConversationMetaSchema, z.null()]).optional(),
+}).passthrough();
+export type ConversationLoadMetaResponse = z.infer<typeof ConversationLoadMetaResponseSchema>;
+
+export const ConversationSaveMetaRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "meta": ConversationMetaSchema,
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationSaveMetaRequest = z.infer<typeof ConversationSaveMetaRequestSchema>;
+
+export const ConversationSaveMetaResponseSchema = z.record(z.string(), z.unknown());
+export type ConversationSaveMetaResponse = z.infer<typeof ConversationSaveMetaResponseSchema>;
+
+export const ConversationScopeSchema = z.object({
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+}).passthrough();
+export type ConversationScope = z.infer<typeof ConversationScopeSchema>;
+
 export const EnvRequirementSchema = z.object({
   "description": z.string().nullable().optional(),
   "name": z.string(),
@@ -70,6 +204,7 @@ export const PluginInfoSchema = z.object({
   "description": z.string().nullable().optional(),
   "name": z.string(),
   "plugin_kind": z.string(),
+  "plugin_kinds": z.array(z.string()).optional(),
   "version": z.string(),
 }).passthrough();
 export type PluginInfo = z.infer<typeof PluginInfoSchema>;
@@ -89,6 +224,7 @@ export const PluginManifestSchema = z.object({
   "name": z.string(),
   "notification_buffer_size": z.number().int().min(0).nullable().optional(),
   "plugin_kind": z.string(),
+  "plugin_kinds": z.array(z.string()).optional(),
   "protocol_version": z.string(),
   "version": z.string(),
 }).passthrough();

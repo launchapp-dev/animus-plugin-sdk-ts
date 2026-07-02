@@ -57,6 +57,7 @@ import { dispatchWorkflowRunner, WORKFLOW_RUNNER_METHODS } from './dispatch/work
 import { dispatchDurableStore, DURABLE_STORE_METHODS } from './dispatch/durable-store.js';
 import { dispatchMemoryStore, MEMORY_STORE_METHODS } from './dispatch/memory-store.js';
 import { dispatchNotifier, deriveNotifierCapabilities } from './dispatch/notifier.js';
+import { defineMultiPlugin, type MultiPluginSpec } from './multi.js';
 
 type RoleSpec =
   | { kind: typeof PluginKind.SubjectBackend; impl: SubjectBackend; subject_kinds?: string[]; projections?: string[] }
@@ -220,7 +221,13 @@ function buildHealthOk(): HealthCheckResult {
   return { status: 'healthy', uptime_ms: null, memory_usage_bytes: null, last_error: null };
 }
 
-export function definePlugin(spec: PluginSpec): PluginHandle {
+/** Single-kind typed authoring surface (`{ kind, impl }`) OR the multi-kind
+ *  raw surface (`{ roles: [...] }`). A single-kind plugin is the 1-role case;
+ *  it keeps the richer typed dispatch (provider streaming, subject route
+ *  backfill), while multi-kind plugins compose flat method tables over one
+ *  serve loop (see `./multi.ts`). */
+export function definePlugin(spec: PluginSpec | MultiPluginSpec): PluginHandle {
+  if ('roles' in spec) return defineMultiPlugin(spec);
   validateSpec(spec);
   const identity: PluginIdentity = {
     name: spec.name,

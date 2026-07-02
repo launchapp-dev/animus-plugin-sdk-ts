@@ -12,6 +12,11 @@
       "description": "Identity of the host.",
       "$ref": "#/$defs/HostInfo"
     },
+    "init_extensions": {
+      "description": "Forward-compatible per-extension blobs the host may pass on initialize.\n\nv0.5 uses this for `project_binding` (the project root the plugin\nprocess is bound to for its lifetime). Plugins ignore extensions they\ndon't recognize; hosts SHOULD only populate extensions a plugin's\ndeclared protocol version is known to understand.\n\nDefaults to empty for back-compat with v1.0.0 hosts.",
+      "type": "object",
+      "additionalProperties": true
+    },
     "protocol_version": {
       "description": "Protocol version the host speaks. See [`PROTOCOL_VERSION`].",
       "type": "string"

@@ -18,7 +18,9 @@ import {
   type PluginInfo,
   type PluginManifest,
   type RpcError,
+  type Visibility,
 } from './generated/plugin.js';
+import { type Actor } from './generated/config.js';
 
 export type {
   EnvRequirement,
@@ -34,6 +36,8 @@ export type {
   PluginInfo,
   PluginManifest,
   RpcError,
+  Visibility,
+  Actor,
 };
 
 /** Protocol version this SDK was built against. Mirrors the Rust
@@ -54,6 +58,11 @@ export const PluginKind = {
   DurableStore: 'durable_store',
   MemoryStore: 'memory_store',
   Notifier: 'notifier',
+  // v0.7 additive kinds (multi-kind BaaS roles).
+  ConfigSource: 'config_source',
+  WorkflowJournal: 'workflow_journal',
+  ConversationStore: 'conversation_store',
+  Environment: 'environment',
   Custom: 'custom',
 } as const;
 export type PluginKindString = (typeof PluginKind)[keyof typeof PluginKind];

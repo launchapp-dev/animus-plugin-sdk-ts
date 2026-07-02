@@ -1,6 +1,7 @@
 // AUTO-GENERATED — DO NOT EDIT BY HAND.
 // Regenerate via: pnpm run codegen
 
+export * as config from "./config.js";
 export * as durableStore from "./durable-store.js";
 export * as logStorage from "./log-storage.js";
 export * as memoryStore from "./memory-store.js";

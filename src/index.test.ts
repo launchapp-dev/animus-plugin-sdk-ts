@@ -13,6 +13,7 @@ import {
   parseFrame,
   PluginKind,
   PROTOCOL_VERSION,
+  runServeLoop,
   validateInitializeParams,
   type RpcRequest,
   type RpcResponse,
@@ -756,5 +757,82 @@ describe('definePlugin', () => {
       capabilities: {},
     });
     expect((reply.result as { protocol_version: string }).protocol_version).toBe(PROTOCOL_VERSION);
+  });
+});
+
+// ---- runServeLoop error-code passthrough -----------------------------------
+
+describe('runServeLoop error-code passthrough', () => {
+  async function runLoop(handler: (params: unknown) => Promise<unknown> | unknown): Promise<RpcResponse> {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const captured: string[] = [];
+    output.on('data', (c: Buffer) => captured.push(c.toString('utf8')));
+
+    const methods = new Map<string, (params: unknown) => Promise<unknown> | unknown>();
+    methods.set('test/op', handler);
+
+    const done = runServeLoop({
+      manifest: {
+        name: 'test-plugin',
+        version: '0.1.0',
+        description: 'test',
+        protocol_version: PROTOCOL_VERSION,
+        plugin_kind: PluginKind.Queue,
+        capabilities: ['test/op'],
+        env_required: [],
+        env_optional: [],
+      },
+      identity: { name: 'test-plugin', version: '0.1.0', description: 'test', plugin_kind: PluginKind.Queue },
+      capabilities: { methods: ['test/op'] },
+      methods,
+      input: input as unknown as NodeJS.ReadableStream,
+      output: output as unknown as NodeJS.WritableStream,
+      skipCliArgs: true,
+    });
+
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'test/op', params: {} })}\n`);
+    input.end();
+    await done;
+
+    return JSON.parse(captured.join('').trim()) as RpcResponse;
+  }
+
+  it('preserves a coded error thrown as { code, message } on the wire', async () => {
+    const frame = await runLoop(() => {
+      throw { code: -32208, message: 'queue conflict' };
+    });
+    expect(frame.error?.code).toBe(-32208);
+    expect(frame.error?.message).toBe('queue conflict');
+  });
+
+  it('preserves data when the thrown error includes it', async () => {
+    const frame = await runLoop(() => {
+      throw { code: -32206, message: 'not found', data: { id: 'q:1' } };
+    });
+    expect(frame.error?.code).toBe(-32206);
+    expect(frame.error?.data).toEqual({ id: 'q:1' });
+  });
+
+  it('falls back to -32603 for a plain thrown Error', async () => {
+    const frame = await runLoop(() => {
+      throw new Error('boom');
+    });
+    expect(frame.error?.code).toBe(ErrorCode.InternalError);
+    expect(frame.error?.message).toMatch(/boom/);
+  });
+
+  it('falls back to -32603 when code is not an integer', async () => {
+    const frame = await runLoop(() => {
+      throw { code: 'NOT_FOUND', message: 'string code must not pass through' };
+    });
+    expect(frame.error?.code).toBe(ErrorCode.InternalError);
+  });
+
+  it('falls back to -32603 when code is a float', async () => {
+    const frame = await runLoop(() => {
+      throw { code: -32208.5, message: 'float code must not pass through' };
+    });
+    expect(frame.error?.code).toBe(ErrorCode.InternalError);
   });
 });

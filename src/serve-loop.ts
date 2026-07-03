@@ -158,6 +158,16 @@ async function handleHealth(id: RpcId, opts: ServeLoopOptions): Promise<RpcRespo
   }
 }
 
+/** Extract a JSON-RPC error code from a thrown value, if present.
+ *  Only honours a finite integer — undefined, NaN, floats, and strings are
+ *  rejected so stray numeric properties never leak a nonsense code. */
+function extractRpcCode(err: unknown): number | null {
+  if (err === null || typeof err !== 'object') return null;
+  const code = (err as Record<string, unknown>).code;
+  if (typeof code === 'number' && Number.isInteger(code) && Number.isFinite(code)) return code;
+  return null;
+}
+
 async function dispatchDomain(id: RpcId, frame: RpcRequest, opts: ServeLoopOptions): Promise<RpcResponse> {
   const handler = opts.methods.get(frame.method);
   if (!handler) return errorResponse(id, ErrorCode.MethodNotFound, `unknown method '${frame.method}'`);
@@ -166,6 +176,14 @@ async function dispatchDomain(id: RpcId, frame: RpcRequest, opts: ServeLoopOptio
     const result = await handler(frame.params, ctx);
     return okResponse(id, result ?? null);
   } catch (err) {
+    const code = extractRpcCode(err);
+    if (code !== null) {
+      const message = typeof (err as Record<string, unknown>).message === 'string'
+        ? (err as Record<string, unknown>).message as string
+        : String(err);
+      const data = (err as Record<string, unknown>).data;
+      return errorResponse(id, code, message, data);
+    }
     return errorResponse(id, ErrorCode.InternalError, `${frame.method} failed: ${String(err)}`);
   }
 }

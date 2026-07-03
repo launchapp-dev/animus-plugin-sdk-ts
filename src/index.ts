@@ -53,6 +53,23 @@ export type { WorkflowJournal, JournalRun, JournalEvent, JournalEventKind, Journ
 export { WORKFLOW_JOURNAL_METHODS } from './roles/workflow-journal.js';
 export type { ConversationStore } from './roles/conversation-store.js';
 export { CONVERSATION_STORE_METHODS } from './roles/conversation-store.js';
+export type {
+  Environment,
+  EnvironmentOutputEmitter,
+  EnvironmentSpec,
+  EnvironmentHandle,
+  HarnessCommand,
+  RepoRef,
+  ExecRequest,
+  ExecResponse,
+  ExecNotification,
+  ExecStream,
+  PrepareRequest,
+  PrepareResponse,
+  TeardownRequest,
+  TeardownResponse,
+} from './roles/environment.js';
+export { ENVIRONMENT_METHODS, ENVIRONMENT_OUTPUT_NOTIFICATION } from './roles/environment.js';
 
 // --- handshake helpers (rarely needed directly) ---
 export { buildInitializeResult, buildManifest, validateInitializeParams } from './handshake.js';

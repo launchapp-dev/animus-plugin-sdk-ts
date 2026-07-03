@@ -3,6 +3,7 @@
 
 export * as config from "./config.js";
 export * as durableStore from "./durable-store.js";
+export * as environment from "./environment.js";
 export * as logStorage from "./log-storage.js";
 export * as memoryStore from "./memory-store.js";
 export * as notifier from "./notifier.js";

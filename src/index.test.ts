@@ -157,6 +157,30 @@ describe('handshake', () => {
     expect(manifest.env_required).toEqual([]);
   });
 
+  it('buildManifest omits supports_mcp when undeclared (back-compat)', () => {
+    const manifest = buildManifest(
+      { name: 'p', version: '0.1.0', description: 'd', plugin_kind: PluginKind.Provider },
+      { methods: ['agent/run'] },
+    );
+    expect('supports_mcp' in manifest).toBe(false);
+  });
+
+  it('buildManifest emits declared supports_mcp (opt-out and opt-in)', () => {
+    const optOut = buildManifest(
+      { name: 'p', version: '0.1.0', description: 'd', plugin_kind: PluginKind.Provider },
+      { methods: ['agent/run'] },
+      { supports_mcp: false },
+    );
+    expect(optOut.supports_mcp).toBe(false);
+
+    const optIn = buildManifest(
+      { name: 'p', version: '0.1.0', description: 'd', plugin_kind: PluginKind.Provider },
+      { methods: ['agent/run'] },
+      { supports_mcp: true },
+    );
+    expect(optIn.supports_mcp).toBe(true);
+  });
+
   it('buildInitializeResult includes plugin_info + capabilities', () => {
     const result = buildInitializeResult(
       { name: 'p', version: '0.1.0', description: 'd', plugin_kind: PluginKind.SubjectBackend },

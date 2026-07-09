@@ -49,6 +49,13 @@ export function buildManifest(
      *  process under every kind in the union. Empty → single-kind (back-compat,
      *  field omitted from the wire). */
     plugin_kinds?: string[];
+    /** Whether this plugin consumes host-injected MCP servers (protocol
+     *  1.2.0+). First-class, plugin-DECLARED capability the kernel reads
+     *  instead of hardcoding per-tool MCP behavior in a name table
+     *  (REQUIREMENT-039). Omit to leave it undeclared — the kernel keeps its
+     *  historical default (provider plugins are MCP-capable); pass `false` to
+     *  opt a provider out of host MCP-server injection. */
+    supports_mcp?: boolean;
   } = {},
 ): PluginManifest {
   const methods = capabilities.methods ?? [];
@@ -74,6 +81,9 @@ export function buildManifest(
   };
   const kinds = dedupeKinds(identity.plugin_kind, options.plugin_kinds);
   if (kinds.length > 0) manifest.plugin_kinds = kinds;
+  // Only emit `supports_mcp` when the author explicitly declared it, so older
+  // hosts and undeclared plugins keep the absent = kernel-default behavior.
+  if (options.supports_mcp !== undefined) manifest.supports_mcp = options.supports_mcp;
   return manifest;
 }
 

@@ -80,6 +80,13 @@ export type PluginSpec = RoleSpec & {
   notification_buffer_size?: number | null;
   /** Extra opt-in capability strings (e.g. `$harness/...`) advertised verbatim. */
   extra_capabilities?: string[];
+  /** Whether this plugin consumes host-injected MCP servers (protocol 1.2.0+).
+   *  First-class, plugin-DECLARED capability the kernel reads instead of
+   *  hardcoding per-tool MCP behavior in a name table (REQUIREMENT-039).
+   *  Primarily for provider plugins. Omit to leave it undeclared — the kernel
+   *  keeps its historical default (provider plugins are MCP-capable); set
+   *  `false` to opt a provider out of host MCP-server injection. */
+  supports_mcp?: boolean;
   /** Optional override of the inbound stream (for testing). */
   input?: NodeJS.ReadableStream;
   /** Optional override of the outbound stream (for testing). */
@@ -261,6 +268,7 @@ export function definePlugin(spec: PluginSpec | MultiPluginSpec): PluginHandle {
     env_required: spec.env_required,
     notification_buffer_size: spec.notification_buffer_size,
     extra_capabilities: extraCaps,
+    supports_mcp: spec.supports_mcp,
   });
 
   const handle: PluginHandle = {

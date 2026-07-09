@@ -226,6 +226,7 @@ export const PluginManifestSchema = z.object({
   "plugin_kind": z.string(),
   "plugin_kinds": z.array(z.string()).optional(),
   "protocol_version": z.string(),
+  "supports_mcp": z.boolean().nullable().optional(),
   "version": z.string(),
 }).passthrough();
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;

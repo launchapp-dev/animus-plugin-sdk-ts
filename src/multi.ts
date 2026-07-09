@@ -54,6 +54,10 @@ export interface MultiPluginSpec {
   notification_buffer_size?: number | null;
   /** Process-wide extra capability tokens (in addition to per-role ones). */
   extra_capabilities?: string[];
+  /** Whether this plugin consumes host-injected MCP servers (protocol 1.2.0+).
+   *  First-class, plugin-DECLARED capability (REQUIREMENT-039). Omit to leave
+   *  undeclared (kernel default); set `false` to opt out. */
+  supports_mcp?: boolean;
   /** Optional health probe for `health/check` (else reports `healthy`). */
   health?: (ctx: CallContext) => Promise<HealthReport> | HealthReport;
   input?: NodeJS.ReadableStream;
@@ -187,6 +191,7 @@ export function defineMultiPlugin(spec: MultiPluginSpec): PluginHandle {
     notification_buffer_size: spec.notification_buffer_size,
     extra_capabilities: c.subjectKindMarkers,
     plugin_kinds: c.pluginKinds,
+    supports_mcp: spec.supports_mcp,
   });
 
   return {

@@ -78,6 +78,91 @@ describe('wire', () => {
     expect(joined.endsWith('\n')).toBe(true);
   });
 
+  it('maxConcurrency > 1 dispatches concurrently and avoids head-of-line blocking', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const captured: string[] = [];
+    output.on('data', (c: Buffer) => captured.push(c.toString('utf8')));
+    const wire = createWire({ input, output, logger: () => undefined, maxConcurrency: 4 });
+
+    const gates: Record<string, () => void> = {};
+    const started: string[] = [];
+    const finished: string[] = [];
+    const tick = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
+
+    const done = wire.run(async (frame) => {
+      started.push(frame.method);
+      await new Promise<void>((res) => {
+        gates[frame.method] = res;
+      });
+      finished.push(frame.method);
+      return okResponse(frame.id ?? null, { method: frame.method });
+    });
+
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'slow' })}\n`);
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'fast' })}\n`);
+    await tick();
+    await tick();
+
+    // Both handlers are in flight — the second did NOT wait for the first.
+    expect(started).toEqual(['slow', 'fast']);
+    expect(finished).toEqual([]);
+
+    // Release the later request first; it completes while the earlier is blocked.
+    gates.fast();
+    await tick();
+    expect(finished).toEqual(['fast']);
+
+    // Release the earlier one and close the stream.
+    gates.slow();
+    input.end();
+    await done;
+
+    expect(finished).toEqual(['fast', 'slow']);
+    const ids = captured
+      .join('')
+      .split('\n')
+      .filter((l) => l.length > 0)
+      .map((l) => (JSON.parse(l) as RpcResponse).id);
+    // The later id:2 was flushed before id:1 — out-of-order, id-correlated.
+    expect(ids).toEqual([2, 1]);
+  });
+
+  it('serial by default: a later request does not start until the earlier finishes', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    output.on('data', () => undefined);
+    const wire = createWire({ input, output, logger: () => undefined });
+
+    const gates: Record<string, () => void> = {};
+    const started: string[] = [];
+    const tick = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
+
+    const done = wire.run(async (frame) => {
+      started.push(frame.method);
+      await new Promise<void>((res) => {
+        gates[frame.method] = res;
+      });
+      return okResponse(frame.id ?? null, {});
+    });
+
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'first' })}\n`);
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'second' })}\n`);
+    await tick();
+    await tick();
+
+    // Default concurrency 1: only the first handler has started.
+    expect(started).toEqual(['first']);
+
+    gates.first();
+    await tick();
+    // Now the second starts.
+    expect(started).toEqual(['first', 'second']);
+    gates.second();
+    input.end();
+    await done;
+  });
+
   it('preserves multi-byte UTF-8 across chunk boundaries', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

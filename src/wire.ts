@@ -28,6 +28,18 @@ export interface WireOptions {
   output?: Writable;
   /** Logger for invalid frames / errors. Defaults to `console.error`. */
   logger?: (msg: string, err?: unknown) => void;
+  /**
+   * Maximum number of request handlers dispatched concurrently. Defaults to
+   * `1` — strictly serial, responding in arrival order, byte-identical to the
+   * historical loop. Raise it for a plugin whose handlers are independent
+   * request/response (e.g. the consolidated Postgres BaaS plugin serving many
+   * roles on one process): serial dispatch there head-of-line-blocks an
+   * unrelated role's request behind whatever is currently in flight. Responses
+   * may then complete out of arrival order — safe, because the Rust plugin host
+   * correlates replies by `id`. Stdout writes stay serialized via `WriteQueue`,
+   * so frames never interleave regardless of this value.
+   */
+  maxConcurrency?: number;
 }
 
 export interface Wire {
@@ -163,11 +175,15 @@ export function createWire(options: WireOptions = {}): Wire {
       // codepoint with U+FFFD and corrupt valid JSON containing non-ASCII
       // subject titles.
       const decoder = new StringDecoder('utf8');
-      // Serialize request handling. Plugins can still kick off background work
-      // inside their handler (and emit streaming notifications via
-      // `notify`/`sendNotification`); the dispatch order matches inbound order
-      // so request ids are responded to in arrival sequence by default.
-      let dispatchChain: Promise<void> = Promise.resolve();
+      // Bounded-concurrent request dispatch: up to `maxConcurrency` handlers run
+      // at once, the rest wait FIFO in `lineQueue`. At the default of 1 this is
+      // strictly serial (responses in arrival order), byte-identical to the
+      // historical single-chain loop. Plugins can still kick off background work
+      // inside a handler and emit streaming notifications via
+      // `notify`/`sendNotification`.
+      const maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 1));
+      const lineQueue: string[] = [];
+      const inFlight = new Set<Promise<void>>();
 
       const handleOne = async (line: string): Promise<void> => {
         const trimmed = line.trim();
@@ -189,8 +205,25 @@ export function createWire(options: WireOptions = {}): Wire {
         }
       };
 
+      // Start as many queued handlers as the concurrency budget allows. Each
+      // handler, on settling, frees its slot and re-pumps so the queue keeps
+      // draining. handleOne never rejects (it catches internally), so the
+      // in-flight promises are always resolve-only.
+      const pump = (): void => {
+        while (inFlight.size < maxConcurrency && lineQueue.length > 0) {
+          const line = lineQueue.shift() as string;
+          const work = handleOne(line);
+          inFlight.add(work);
+          void work.finally(() => {
+            inFlight.delete(work);
+            pump();
+          });
+        }
+      };
+
       const enqueue = (line: string): void => {
-        dispatchChain = dispatchChain.then(() => handleOne(line));
+        lineQueue.push(line);
+        pump();
       };
 
       const onData = (chunk: Buffer | string): void => {
@@ -214,8 +247,14 @@ export function createWire(options: WireOptions = {}): Wire {
           enqueue(buffer);
           buffer = '';
         }
-        // Drain serialized dispatch chain before resolving.
-        await dispatchChain;
+        // Drain the queued + in-flight request handlers (which may settle out
+        // of order at maxConcurrency > 1) before resolving.
+        while (lineQueue.length > 0 || inFlight.size > 0) {
+          pump();
+          if (inFlight.size > 0) {
+            await Promise.race([...inFlight]);
+          }
+        }
         // Then drain any out-of-band background work (detached provider runs)
         // so their final responses are flushed before the loop resolves. A
         // settling run may register follow-on work, so loop until quiescent.

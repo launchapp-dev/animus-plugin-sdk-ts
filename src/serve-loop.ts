@@ -52,6 +52,13 @@ export interface ServeLoopOptions {
   output?: NodeJS.WritableStream;
   /** Skip the `--manifest` CLI shortcut (tests). */
   skipCliArgs?: boolean;
+  /**
+   * Maximum request handlers dispatched concurrently (default 1 = serial). Raise
+   * it for a plugin whose handlers are independent request/response — e.g. a
+   * consolidated multi-role BaaS plugin — so one role's slow request cannot
+   * head-of-line-block another's. See {@link WireOptions.maxConcurrency}.
+   */
+  maxConcurrency?: number;
 }
 
 /** Extract a typed Actor from a call's params, if the transport relayed one on
@@ -96,6 +103,7 @@ export async function runServeLoop(opts: ServeLoopOptions): Promise<void> {
   const wire: Wire = createWire({
     input: opts.input as NodeJS.ReadableStream | undefined as never,
     output: opts.output as NodeJS.WritableStream | undefined as never,
+    maxConcurrency: opts.maxConcurrency,
   });
 
   await wire.run((frame) => dispatch(frame, wire, opts));

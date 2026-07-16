@@ -30,12 +30,22 @@ export type EnvironmentSpec = z.infer<typeof EnvironmentSpecSchema>;
 export const ExecStreamSchema = z.enum(["stdout", "stderr"]);
 export type ExecStream = z.infer<typeof ExecStreamSchema>;
 
-export const ExecNotificationSchema = z.object({
+export const ExecNotificationSchema = z.union([z.object({
   "handle_id": z.string(),
   "kind": z.literal("output"),
   "stream": ExecStreamSchema,
   "text": z.string(),
-}).passthrough();
+}).passthrough(), z.object({
+  "event_kind": z.string(),
+  "handle_id": z.string(),
+  "kind": z.literal("journal"),
+  "payload": z.unknown(),
+  "phase_id": z.string().nullable().optional(),
+  "status": z.string().nullable().optional(),
+  "terminal": z.boolean().optional(),
+  "ts": z.string(),
+  "workflow_id": z.string().nullable().optional(),
+}).passthrough()]);
 export type ExecNotification = z.infer<typeof ExecNotificationSchema>;
 
 export const HarnessCommandSchema = z.object({
@@ -61,6 +71,20 @@ export const ExecResponseSchema = z.object({
   "timed_out": z.boolean().optional(),
 }).passthrough();
 export type ExecResponse = z.infer<typeof ExecResponseSchema>;
+
+export const ExecSessionRequestSchema = z.object({
+  "dispatch_input": z.string().nullable().optional(),
+  "handle": EnvironmentHandleSchema,
+  "subject_id": z.string(),
+  "workflow_ref": z.string().nullable().optional(),
+}).passthrough();
+export type ExecSessionRequest = z.infer<typeof ExecSessionRequestSchema>;
+
+export const ExecSessionResponseSchema = z.object({
+  "status": z.string(),
+  "workflow_id": z.string().nullable().optional(),
+}).passthrough();
+export type ExecSessionResponse = z.infer<typeof ExecSessionResponseSchema>;
 
 export const PrepareRequestSchema = z.object({
   "spec": EnvironmentSpecSchema,

@@ -26,6 +26,8 @@ import type {
   ExecNotification,
   ExecRequest,
   ExecResponse,
+  ExecSessionRequest,
+  ExecSessionResponse,
   PrepareRequest,
   PrepareResponse,
   TeardownRequest,
@@ -39,6 +41,8 @@ export {
   ExecNotificationSchema,
   ExecRequestSchema,
   ExecResponseSchema,
+  ExecSessionRequestSchema,
+  ExecSessionResponseSchema,
   ExecStreamSchema,
   HarnessCommandSchema,
   PrepareRequestSchema,
@@ -53,6 +57,7 @@ export const ENVIRONMENT_METHODS = {
   prepare: 'environment/prepare',
   exec: 'environment/exec',
   execStream: 'environment/exec_stream',
+  execSession: 'environment/exec_session',
   teardown: 'environment/teardown',
 } as const;
 
@@ -60,10 +65,19 @@ export const ENVIRONMENT_METHODS = {
  *  (Rust `NOTIFICATION_ENVIRONMENT_OUTPUT`). */
 export const ENVIRONMENT_OUTPUT_NOTIFICATION = 'environment/output';
 
+/** Server-streaming notification an `exec_session` call emits per journal event
+ *  (Rust `NOTIFICATION_ENVIRONMENT_JOURNAL`). */
+export const ENVIRONMENT_JOURNAL_NOTIFICATION = 'environment/journal';
+
 /** Emit an incremental `environment/output` notification for an in-flight
  *  `exec_stream`. Passed to the author's `execStream` handler so it can stream
  *  stdout/stderr deltas back to the host as they arrive. */
 export type EnvironmentOutputEmitter = (note: ExecNotification) => void;
+
+/** Emit an `environment/journal` notification for an in-flight `exec_session`.
+ *  Passed to the author's `execSession` handler so it can forward the node's
+ *  journal events (an `ExecNotification` `Journal` variant) as they arrive. */
+export type EnvironmentJournalEmitter = (note: ExecNotification) => void;
 
 export interface Environment {
   /** Materialize the execution context described by `params.spec` and return an
@@ -80,6 +94,16 @@ export interface Environment {
     emit: EnvironmentOutputEmitter,
     ctx: CallContext,
   ): Promise<ExecResponse> | ExecResponse;
+  /** Dispatch a subject to the environment's OWN animus (REQ-052 remote-animus):
+   *  the node runs the workflow through its own provider/session layer and this
+   *  handler forwards its journal events via `emit(...)`, then resolves with the
+   *  node-local run's terminal `ExecSessionResponse`. Omit to advertise an
+   *  environment that only runs raw commands (the host falls back to exec). */
+  execSession?(
+    params: ExecSessionRequest,
+    emit: EnvironmentJournalEmitter,
+    ctx: CallContext,
+  ): Promise<ExecSessionResponse> | ExecSessionResponse;
   /** Dispose of the prepared context. MUST be idempotent — a second teardown of
    *  an already-gone context resolves successfully. */
   teardown(params: TeardownRequest, ctx: CallContext): Promise<TeardownResponse> | TeardownResponse;

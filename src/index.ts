@@ -56,6 +56,7 @@ export { CONVERSATION_STORE_METHODS } from './roles/conversation-store.js';
 export type {
   Environment,
   EnvironmentOutputEmitter,
+  EnvironmentJournalEmitter,
   EnvironmentSpec,
   EnvironmentHandle,
   HarnessCommand,
@@ -63,13 +64,19 @@ export type {
   ExecRequest,
   ExecResponse,
   ExecNotification,
+  ExecSessionRequest,
+  ExecSessionResponse,
   ExecStream,
   PrepareRequest,
   PrepareResponse,
   TeardownRequest,
   TeardownResponse,
 } from './roles/environment.js';
-export { ENVIRONMENT_METHODS, ENVIRONMENT_OUTPUT_NOTIFICATION } from './roles/environment.js';
+export {
+  ENVIRONMENT_METHODS,
+  ENVIRONMENT_OUTPUT_NOTIFICATION,
+  ENVIRONMENT_JOURNAL_NOTIFICATION,
+} from './roles/environment.js';
 
 // --- handshake helpers (rarely needed directly) ---
 export { buildInitializeResult, buildManifest, validateInitializeParams } from './handshake.js';

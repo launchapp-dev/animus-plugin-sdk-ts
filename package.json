@@ -88,6 +88,7 @@
     "clean": "rm -rf dist coverage",
     "codegen": "node scripts/codegen.mjs",
     "codegen:check": "node scripts/codegen-check.mjs",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build"
   },

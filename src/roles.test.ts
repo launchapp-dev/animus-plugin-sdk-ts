@@ -11,6 +11,7 @@ import { AgentRunRequestSchema } from './provider.js';
 import { LogEntrySchema } from './log-storage.js';
 import { TransportConfigSchema } from './transport.js';
 import { QueueEnqueueRequestSchema, QueueLeaseRequestSchema } from './queue.js';
+import { ExecSessionRequestSchema } from './environment.js';
 
 const NOW = '2026-06-07T00:00:00.000Z';
 
@@ -93,6 +94,15 @@ describe('generated Zod schemas', () => {
   it('emits numeric bounds from the schema (QueueLeaseRequest.max >= 0)', () => {
     expect(QueueLeaseRequestSchema.safeParse({ max: -1 }).success).toBe(false);
     expect(QueueLeaseRequestSchema.safeParse({ max: 5 }).success).toBe(true);
+  });
+
+  it('ExecSessionRequestSchema preserves the selected workflow id', () => {
+    const parsed = ExecSessionRequestSchema.parse({
+      handle: { id: 'env-1', kind: 'railway', workspace_root: '/workspace' },
+      subject_id: 'task:TASK-1175',
+      workflow_id: 'coding',
+    });
+    expect(parsed.workflow_id).toBe('coding');
   });
 });
 

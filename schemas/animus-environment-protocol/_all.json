@@ -240,6 +240,13 @@
             "string",
             "null"
           ]
+        },
+        "workflow_id": {
+          "description": "Workflow to run the subject through. `None` uses the node's default\nrouting for the subject's kind.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

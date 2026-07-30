@@ -77,6 +77,7 @@ export const ExecSessionRequestSchema = z.object({
   "handle": EnvironmentHandleSchema,
   "subject_id": z.string(),
   "workflow_ref": z.string().nullable().optional(),
+  "workflow_id": z.string().nullable().optional(),
 }).passthrough();
 export type ExecSessionRequest = z.infer<typeof ExecSessionRequestSchema>;
 

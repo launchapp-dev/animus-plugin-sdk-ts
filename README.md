@@ -2,7 +2,7 @@
 
 TypeScript SDK for authoring [Animus](https://github.com/launchapp-dev/animus-cli) plugins. Ship a plugin for **any** Animus role in TypeScript without reading the Rust source.
 
-> Status: **0.1.x, protocol 1.1.0.** All plugin roles are wired (subject, provider, trigger, transport, log-storage, queue, workflow-runner, durable-store, memory-store, notifier). Types are generated as **Zod schemas** from the Rust protocol crates — Rust is the single source of truth.
+> Status: **0.2.x, protocol 1.1.0.** All plugin roles are wired (subject, provider, trigger, transport, log-storage, queue, workflow-runner, durable-store, memory-store, notifier). Types are generated as **Zod schemas** from the Rust protocol crates — Rust is the single source of truth.
 
 This repo is the canonical home of the TypeScript plugin SDK. The Rust
 orchestrator lives in
@@ -11,6 +11,8 @@ package is published independently to npm so plugin authors can depend on a
 stable TypeScript contract without pulling the Rust toolchain.
 
 ## Install
+
+Install the SDK from the public npm registry:
 
 ```bash
 npm install @launchapp-dev/animus-plugin-sdk

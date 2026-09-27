@@ -9,6 +9,17 @@ export const EnvironmentHandleSchema = z.object({
 }).passthrough();
 export type EnvironmentHandle = z.infer<typeof EnvironmentHandleSchema>;
 
+export const EnvironmentNodeSchema = z.object({
+  "created_at": z.string().nullable().optional(),
+  "id": z.string(),
+  "image": z.string().nullable().optional(),
+  "name": z.string(),
+  "orphan": z.boolean(),
+  "run_id": z.string().nullable().optional(),
+  "state": z.string(),
+}).passthrough();
+export type EnvironmentNode = z.infer<typeof EnvironmentNodeSchema>;
+
 export const RepoRefSchema = z.object({
   "git_ref": z.string().nullable().optional(),
   "name": z.string().nullable().optional(),
@@ -72,20 +83,72 @@ export const ExecResponseSchema = z.object({
 }).passthrough();
 export type ExecResponse = z.infer<typeof ExecResponseSchema>;
 
+export const QueueLeaseFenceSchema = z.object({
+  "entry_id": z.string(),
+  "expires_at": z.string().datetime({ offset: true }),
+  "generation": z.number().int().min(0),
+  "owner_id": z.string(),
+}).strict();
+export type QueueLeaseFence = z.infer<typeof QueueLeaseFenceSchema>;
+
+export const RepositoryReservationSchema = z.object({
+  "base_ref": z.string(),
+  "head_ref": z.string(),
+  "repository": z.string(),
+}).strict();
+export type RepositoryReservation = z.infer<typeof RepositoryReservationSchema>;
+
+export const SubjectGenerationSchema = z.object({
+  "generation": z.number().int().min(0),
+  "qualified_id": z.string(),
+}).strict();
+export type SubjectGeneration = z.infer<typeof SubjectGenerationSchema>;
+
+export const ExecutionFenceSchema = z.object({
+  "queue_lease": z.union([QueueLeaseFenceSchema, z.null()]).optional(),
+  "repository": z.union([RepositoryReservationSchema, z.null()]).optional(),
+  "schema": z.string(),
+  "subject": z.union([SubjectGenerationSchema, z.null()]).optional(),
+  "version": z.number().int().min(0),
+  "workflow_generation": z.number().int().min(0),
+  "workflow_id": z.string(),
+}).strict();
+export type ExecutionFence = z.infer<typeof ExecutionFenceSchema>;
+
 export const ExecSessionRequestSchema = z.object({
   "dispatch_input": z.string().nullable().optional(),
+  "execution_fence": z.union([ExecutionFenceSchema, z.null()]).optional(),
   "handle": EnvironmentHandleSchema,
   "subject_id": z.string(),
-  "workflow_ref": z.string().nullable().optional(),
   "workflow_id": z.string().nullable().optional(),
+  "workflow_ref": z.string().nullable().optional(),
 }).passthrough();
 export type ExecSessionRequest = z.infer<typeof ExecSessionRequestSchema>;
 
 export const ExecSessionResponseSchema = z.object({
+  "execution_fence": z.union([ExecutionFenceSchema, z.null()]).optional(),
   "status": z.string(),
   "workflow_id": z.string().nullable().optional(),
 }).passthrough();
 export type ExecSessionResponse = z.infer<typeof ExecSessionResponseSchema>;
+
+export const GetNodeRequestSchema = z.object({
+  "id": z.string(),
+}).passthrough();
+export type GetNodeRequest = z.infer<typeof GetNodeRequestSchema>;
+
+export const GetNodeResponseSchema = z.object({
+  "node": z.union([EnvironmentNodeSchema, z.null()]).optional(),
+}).passthrough();
+export type GetNodeResponse = z.infer<typeof GetNodeResponseSchema>;
+
+export const ListNodesRequestSchema = z.record(z.string(), z.unknown());
+export type ListNodesRequest = z.infer<typeof ListNodesRequestSchema>;
+
+export const ListNodesResponseSchema = z.object({
+  "nodes": z.array(EnvironmentNodeSchema).optional(),
+}).passthrough();
+export type ListNodesResponse = z.infer<typeof ListNodesResponseSchema>;
 
 export const PrepareRequestSchema = z.object({
   "spec": EnvironmentSpecSchema,
@@ -96,6 +159,32 @@ export const PrepareResponseSchema = z.object({
   "handle": EnvironmentHandleSchema,
 }).passthrough();
 export type PrepareResponse = z.infer<typeof PrepareResponseSchema>;
+
+export const ReapRequestSchema = z.object({
+  "all": z.boolean().optional(),
+  "dry_run": z.boolean().optional(),
+  "force": z.boolean().optional(),
+  "live_run_ids": z.array(z.string()).nullable().optional(),
+  "older_than_secs": z.number().int().min(0).nullable().optional(),
+}).passthrough();
+export type ReapRequest = z.infer<typeof ReapRequestSchema>;
+
+export const ReapResponseSchema = z.object({
+  "deleted": z.array(z.string()).optional(),
+  "dry_run": z.boolean().optional(),
+  "kept": z.array(EnvironmentNodeSchema).optional(),
+}).passthrough();
+export type ReapResponse = z.infer<typeof ReapResponseSchema>;
+
+export const TeardownNodeRequestSchema = z.object({
+  "id": z.string(),
+}).passthrough();
+export type TeardownNodeRequest = z.infer<typeof TeardownNodeRequestSchema>;
+
+export const TeardownNodeResponseSchema = z.object({
+  "deleted": z.array(z.string()).optional(),
+}).passthrough();
+export type TeardownNodeResponse = z.infer<typeof TeardownNodeResponseSchema>;
 
 export const TeardownRequestSchema = z.object({
   "handle": EnvironmentHandleSchema,

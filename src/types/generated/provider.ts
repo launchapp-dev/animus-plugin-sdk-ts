@@ -7,6 +7,15 @@ export const AgentCancelRequestSchema = z.object({
 }).passthrough();
 export type AgentCancelRequest = z.infer<typeof AgentCancelRequestSchema>;
 
+export const InteractionRequestPayloadSchema = z.object({
+  "action": z.string().nullable().optional(),
+  "arguments": z.unknown().optional(),
+  "options": z.array(z.string()).nullable().optional(),
+  "question": z.string().nullable().optional(),
+  "tool_name": z.string().nullable().optional(),
+}).passthrough();
+export type InteractionRequestPayload = z.infer<typeof InteractionRequestPayloadSchema>;
+
 export const AgentNotificationSchema = z.union([z.object({
   "is_final": z.boolean().optional(),
   "kind": z.literal("output"),
@@ -32,6 +41,13 @@ export const AgentNotificationSchema = z.union([z.object({
   "kind": z.literal("error"),
   "message": z.string(),
   "recoverable": z.boolean(),
+  "session_id": z.string(),
+}).passthrough(), z.object({
+  "expires_at": z.string().nullable().optional(),
+  "interaction_id": z.string(),
+  "interaction_kind": z.string(),
+  "kind": z.literal("interactionRequested"),
+  "payload": InteractionRequestPayloadSchema.optional(),
   "session_id": z.string(),
 }).passthrough()]);
 export type AgentNotification = z.infer<typeof AgentNotificationSchema>;

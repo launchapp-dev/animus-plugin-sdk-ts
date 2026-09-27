@@ -75,3 +75,30 @@ export const ConfigWriteResponseSchema = z.object({
   "cache_token": z.union([CacheTokenSchema, z.null()]).optional(),
 }).passthrough();
 export type ConfigWriteResponse = z.infer<typeof ConfigWriteResponseSchema>;
+
+export const WorkflowPublicationCleanupPolicySchema = z.enum(["retain", "after_remote_verified"]);
+export type WorkflowPublicationCleanupPolicy = z.infer<typeof WorkflowPublicationCleanupPolicySchema>;
+
+export const WorkflowPublicationOwnerSchema = z.union([z.object({
+  "kind": z.literal("runner"),
+}).strict(), z.object({
+  "kind": z.literal("phase"),
+  "phase_id": z.string(),
+}).strict()]);
+export type WorkflowPublicationOwner = z.infer<typeof WorkflowPublicationOwnerSchema>;
+
+export const WorkflowPublicationConfigSchema = z.object({
+  "cleanup": WorkflowPublicationCleanupPolicySchema.optional(),
+  "owner": z.union([WorkflowPublicationOwnerSchema, z.null()]).optional(),
+  "required": z.boolean().optional(),
+  "schema": z.string().optional(),
+  "version": z.number().int().min(0).optional(),
+}).strict();
+export type WorkflowPublicationConfig = z.infer<typeof WorkflowPublicationConfigSchema>;
+
+export const WorkflowPublicationMigrationDiagnosticSchema = z.object({
+  "code": z.string(),
+  "message": z.string(),
+  "workflow_id": z.string(),
+}).passthrough();
+export type WorkflowPublicationMigrationDiagnostic = z.infer<typeof WorkflowPublicationMigrationDiagnosticSchema>;

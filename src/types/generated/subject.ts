@@ -2,6 +2,13 @@
 // Regenerate via: pnpm run codegen
 import { z } from "zod";
 
+export const ActorSchema = z.object({
+  "claims": z.array(z.string()).optional(),
+  "tenant_id": z.string().nullable().optional(),
+  "user_id": z.string(),
+}).passthrough();
+export type Actor = z.infer<typeof ActorSchema>;
+
 export const ChangeKindSchema = z.enum(["created", "updated", "status-changed", "deleted", "dispatch-label-changed", "attachment-added", "attachment-removed"]);
 export type ChangeKind = z.infer<typeof ChangeKindSchema>;
 
@@ -79,6 +86,27 @@ export const SubjectChangedEventSchema = z.object({
 }).passthrough();
 export type SubjectChangedEvent = z.infer<typeof SubjectChangedEventSchema>;
 
+export const SubjectRequestContextSchema = z.object({
+  "actor": ActorSchema,
+  "correlation_id": z.string().nullable().optional(),
+  "idempotency_key": z.string().nullable().optional(),
+  "request_id": z.string().nullable().optional(),
+}).passthrough();
+export type SubjectRequestContext = z.infer<typeof SubjectRequestContextSchema>;
+
+export const SubjectCreateRequestV2Schema = z.object({
+  "context": SubjectRequestContextSchema,
+  "kind": z.string().nullable().optional(),
+  "payload": z.unknown().optional(),
+}).passthrough();
+export type SubjectCreateRequestV2 = z.infer<typeof SubjectCreateRequestV2Schema>;
+
+export const SubjectDeleteRequestV2Schema = z.object({
+  "context": SubjectRequestContextSchema,
+  "id": SubjectIdSchema,
+}).passthrough();
+export type SubjectDeleteRequestV2 = z.infer<typeof SubjectDeleteRequestV2Schema>;
+
 export const SubjectFilterSchema = z.object({
   "assignee": z.array(z.string()).optional(),
   "cursor": z.string().nullable().optional(),
@@ -94,12 +122,24 @@ export const SubjectFilterSchema = z.object({
 }).passthrough();
 export type SubjectFilter = z.infer<typeof SubjectFilterSchema>;
 
+export const SubjectGetRequestV2Schema = z.object({
+  "context": SubjectRequestContextSchema,
+  "id": SubjectIdSchema,
+}).passthrough();
+export type SubjectGetRequestV2 = z.infer<typeof SubjectGetRequestV2Schema>;
+
 export const SubjectListSchema = z.object({
   "fetched_at": z.string().datetime({ offset: true }),
   "next_cursor": z.string().nullable().optional(),
   "subjects": z.array(SubjectSchema),
 }).passthrough();
 export type SubjectList = z.infer<typeof SubjectListSchema>;
+
+export const SubjectListRequestV2Schema = z.object({
+  "context": SubjectRequestContextSchema,
+  "filter": SubjectFilterSchema.optional(),
+}).passthrough();
+export type SubjectListRequestV2 = z.infer<typeof SubjectListRequestV2Schema>;
 
 export const SubjectPatchSchema = z.object({
   "assignee": z.string().nullable().optional(),
@@ -123,3 +163,22 @@ export const SubjectSchemaSchema = z.object({
   "supports_watch": z.boolean(),
 }).passthrough();
 export type SubjectSchema = z.infer<typeof SubjectSchemaSchema>;
+
+export const SubjectStatusRequestV2Schema = z.object({
+  "context": SubjectRequestContextSchema,
+  "id": SubjectIdSchema,
+  "status": z.string(),
+}).passthrough();
+export type SubjectStatusRequestV2 = z.infer<typeof SubjectStatusRequestV2Schema>;
+
+export const SubjectUnwatchRequestSchema = z.object({
+  "watch_id": z.string(),
+}).passthrough();
+export type SubjectUnwatchRequest = z.infer<typeof SubjectUnwatchRequestSchema>;
+
+export const SubjectUpdateRequestV2Schema = z.object({
+  "context": SubjectRequestContextSchema,
+  "id": SubjectIdSchema,
+  "patch": z.unknown().optional(),
+}).passthrough();
+export type SubjectUpdateRequestV2 = z.infer<typeof SubjectUpdateRequestV2Schema>;

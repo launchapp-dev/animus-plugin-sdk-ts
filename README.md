@@ -67,7 +67,27 @@ The runtime uses these schemas to **validate inbound params** before routing to
 your `impl` — a malformed request gets a `-32602` (`invalid_params`) reply with
 the Zod issue list in `error.data`, not a crash.
 
-Regenerate after updating the vendored schemas:
+Refresh from an exact release tag or commit in a clean `animus-protocol`
+checkout. The checkout's HEAD must match the requested revision:
+
+```bash
+npm run schemas:sync -- --protocol-root /path/to/animus-protocol --ref v0.7.0-rc.43
+```
+
+This discovers every workspace schema exporter (including config), builds and
+runs them into a temporary directory, refreshes the vendored bundles, records
+the source revision in `schemas/source.json`, and regenerates the TypeScript
+types. It requires Rust/Cargo and access to uncached dependencies. It does not
+fetch or change the source checkout. Choose an explicit newer release when
+upgrading; `codegen` alone only regenerates from the already-vendored schemas.
+
+All generated bundles, including application receipts and execution fences,
+are available as namespaces through `@launchapp-dev/animus-plugin-sdk/types`.
+Generated validators preserve closed-object rules, string bounds and patterns,
+and numeric bounds declared by the Rust schemas. Existing role entrypoints
+remain available.
+
+Regenerate from the vendored schemas without a Rust checkout:
 
 ```bash
 npm run codegen        # emit src/types/generated/*.ts from schemas/*/_all.json

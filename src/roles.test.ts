@@ -12,6 +12,8 @@ import { LogEntrySchema } from './log-storage.js';
 import { TransportConfigSchema } from './transport.js';
 import { QueueEnqueueRequestSchema, QueueLeaseRequestSchema } from './queue.js';
 import { ExecSessionRequestSchema } from './environment.js';
+import { ApplicationChatControlsSchema, ApplicationChatReceiptFrameSchema } from './types/generated/application.js';
+import { ConversationOperationBeginRequestSchema } from './types/generated/plugin.js';
 
 const NOW = '2026-06-07T00:00:00.000Z';
 
@@ -45,6 +47,29 @@ async function drive(
 // ---- codegen output validates real frames ---------------------------------
 
 describe('generated Zod schemas', () => {
+  it('enforces closed application controls and configured-reference bounds', () => {
+    const controls = { schema: 'animus.chat.application_controls.v1', profile_ref: 'support' };
+    expect(ApplicationChatControlsSchema.safeParse(controls).success).toBe(true);
+    expect(ApplicationChatControlsSchema.safeParse({ ...controls, shell: 'run' }).success).toBe(false);
+    for (const profile_ref of ['', '../admin', 'a'.repeat(65), 'profile with spaces']) {
+      expect(ApplicationChatControlsSchema.safeParse({ ...controls, profile_ref }).success).toBe(false);
+    }
+  });
+
+  it('validates application receipts against identifier and sequence constraints', () => {
+    const receipt = {
+      type: 'user_message_accepted', conversation_id: 'chat-1', message_id: 'message-1',
+      operation_id: 'operation-1', seq: 1, status: 'user_accepted',
+    };
+    expect(ApplicationChatReceiptFrameSchema.safeParse(receipt).success).toBe(true);
+    expect(ApplicationChatReceiptFrameSchema.safeParse({ ...receipt, conversation_id: 'chat\n1' }).success).toBe(false);
+    expect(ApplicationChatReceiptFrameSchema.safeParse({ ...receipt, seq: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false);
+  });
+
+  it('requires conversation operation identity fields from the refreshed protocol', () => {
+    expect(ConversationOperationBeginRequestSchema.safeParse({ conversation_id: 'chat-1' }).success).toBe(false);
+  });
+
   it('WireSubjectSchema accepts a full wire subject and infers a usable type', () => {
     const parsed = WireSubjectSchema.parse({
       id: 'task:1',

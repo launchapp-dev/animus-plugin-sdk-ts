@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/launchapp-dev/animus-protocol",
+  "ref": "v0.7.0-rc.43",
+  "commit": "88ee00a922b80fb785424b1f2d3231cb09a57ca7",
+  "crates": [
+    "animus-application-protocol",
+    "animus-config-protocol",
+    "animus-durable-store-protocol",
+    "animus-environment-protocol",
+    "animus-execution-protocol",
+    "animus-log-storage-protocol",
+    "animus-memory-store-protocol",
+    "animus-notifier-protocol",
+    "animus-plugin-protocol",
+    "animus-provider-protocol",
+    "animus-queue-protocol",
+    "animus-subject-protocol",
+    "animus-transport-protocol",
+    "animus-trigger-protocol",
+    "animus-workflow-runner-protocol"
+  ]
+}

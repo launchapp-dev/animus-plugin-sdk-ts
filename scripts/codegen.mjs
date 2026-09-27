@@ -126,9 +126,14 @@ function renderNode(node, ctx) {
   }
 
   switch (type) {
-    case "string":
-      if (node.format === "date-time") return "z.string().datetime({ offset: true })";
-      return "z.string()";
+    case "string": {
+      let out = "z.string()";
+      if (node.format === "date-time") out += ".datetime({ offset: true })";
+      if (typeof node.minLength === "number") out += `.min(${node.minLength})`;
+      if (typeof node.maxLength === "number") out += `.max(${node.maxLength})`;
+      if (typeof node.pattern === "string") out += `.regex(new RegExp(${JSON.stringify(node.pattern)}))`;
+      return out;
+    }
     case "integer":
       return applyNumericBounds("z.number().int()", node);
     case "number":
@@ -148,7 +153,7 @@ function renderNode(node, ctx) {
         return `z.record(z.string(), ${val})`;
       }
       // Free-form object with no declared properties → permissive record.
-      if (!node.properties || Object.keys(node.properties).length === 0) {
+      if ((!node.properties || Object.keys(node.properties).length === 0) && node.additionalProperties !== false) {
         return "z.record(z.string(), z.unknown())";
       }
       return renderObject(node, ctx);
@@ -190,8 +195,7 @@ function renderObject(node, ctx) {
   }
   const body = lines.join("\n");
   let obj = `z.object({\n${indent(body, 1)}\n})`;
-  // Allow unknown extra keys (forward-compat with newer hosts/minors).
-  obj = `${obj}.passthrough()`;
+  obj = `${obj}.${node.additionalProperties === false ? "strict" : "passthrough"}()`;
   return obj;
 }
 

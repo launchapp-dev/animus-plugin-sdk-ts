@@ -1,6 +1,6 @@
 {
   "name": "@launchapp-dev/animus-plugin-sdk",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "TypeScript SDK for authoring Animus plugins. Zod-typed, Rust protocol is the source of truth. Covers subject, provider, trigger, transport, log-storage, queue, workflow-runner, durable-store, memory-store, notifier, config-source, workflow-journal, conversation-store, and environment roles, plus multi-kind plugins.",
   "license": "Elastic-2.0",
   "type": "module",
@@ -8,6 +8,10 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./types": {
+      "types": "./dist/types/generated/index.d.ts",
+      "import": "./dist/types/generated/index.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -86,6 +90,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist coverage",
+    "schemas:sync": "node scripts/sync-schemas.mjs",
     "codegen": "node scripts/codegen.mjs",
     "codegen:check": "node scripts/codegen-check.mjs",
     "prepare": "npm run build",

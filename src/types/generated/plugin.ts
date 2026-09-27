@@ -15,12 +15,21 @@ export const ChatMessageSchema = z.object({
 }).passthrough();
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
+export const ConversationOperationAppendFenceSchema = z.object({
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+}).passthrough();
+export type ConversationOperationAppendFence = z.infer<typeof ConversationOperationAppendFenceSchema>;
+
 export const ConversationAppendMessageRequestSchema = z.object({
   "as_user": z.string().nullable().optional(),
   "id": z.string(),
   "message": ChatMessageSchema,
+  "operation_fence": z.union([ConversationOperationAppendFenceSchema, z.null()]).optional(),
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationAppendMessageRequest = z.infer<typeof ConversationAppendMessageRequestSchema>;
 
@@ -31,20 +40,25 @@ export const VisibilitySchema = z.enum(["private", "shared"]);
 export type Visibility = z.infer<typeof VisibilitySchema>;
 
 export const ConversationCreateRequestSchema = z.object({
+  "agent_id": z.string().nullable().optional(),
   "id": z.string().nullable().optional(),
   "owner": z.string().nullable().optional(),
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
   "visibility": VisibilitySchema.optional(),
 }).passthrough();
 export type ConversationCreateRequest = z.infer<typeof ConversationCreateRequestSchema>;
 
 export const ConversationMetaSchema = z.object({
+  "active_operation_id": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")).nullable().optional(),
+  "agent_id": z.string().nullable().optional(),
   "created_at": z.string(),
   "id": z.string(),
   "message_count": z.number().int().min(0).optional(),
   "model": z.string().nullable().optional(),
   "owner": z.string().nullable().optional(),
+  "revision": z.number().int().min(0).optional(),
   "session_id": z.string().nullable().optional(),
   "title": z.string().nullable().optional(),
   "tool": z.string().nullable().optional(),
@@ -63,6 +77,7 @@ export const ConversationDeleteRequestSchema = z.object({
   "id": z.string(),
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationDeleteRequest = z.infer<typeof ConversationDeleteRequestSchema>;
 
@@ -73,14 +88,17 @@ export const ConversationListRequestSchema = z.object({
   "as_user": z.string().nullable().optional(),
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationListRequest = z.infer<typeof ConversationListRequestSchema>;
 
 export const ConversationSummarySchema = z.object({
+  "agent_id": z.string().nullable().optional(),
   "id": z.string(),
   "message_count": z.number().int().min(0),
   "model": z.string().nullable().optional(),
   "owner": z.string().nullable().optional(),
+  "revision": z.number().int().min(0).optional(),
   "title": z.string().nullable().optional(),
   "tool": z.string().nullable().optional(),
   "updated_at": z.string(),
@@ -98,6 +116,7 @@ export const ConversationLoadMessagesRequestSchema = z.object({
   "id": z.string(),
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationLoadMessagesRequest = z.infer<typeof ConversationLoadMessagesRequestSchema>;
 
@@ -111,6 +130,7 @@ export const ConversationLoadMetaRequestSchema = z.object({
   "id": z.string(),
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationLoadMetaRequest = z.infer<typeof ConversationLoadMetaRequestSchema>;
 
@@ -119,11 +139,168 @@ export const ConversationLoadMetaResponseSchema = z.object({
 }).passthrough();
 export type ConversationLoadMetaResponse = z.infer<typeof ConversationLoadMetaResponseSchema>;
 
+export const ConversationOperationStatusSchema = z.enum(["pending", "user_accepted", "completed", "assistant_failed", "assistant_interrupted"]);
+export type ConversationOperationStatus = z.infer<typeof ConversationOperationStatusSchema>;
+
+export const ConversationOperationSchema = z.object({
+  "assistant_message_id": z.string(),
+  "assistant_seq": z.number().int().min(0).nullable().optional(),
+  "caller_key": z.string(),
+  "conversation_id": z.string(),
+  "error_code": z.string().nullable().optional(),
+  "error_message": z.string().nullable().optional(),
+  "execution_hash": z.string().nullable().optional(),
+  "operation_id": z.string(),
+  "status": ConversationOperationStatusSchema,
+  "user_message_id": z.string(),
+  "user_seq": z.number().int().min(0).nullable().optional(),
+}).passthrough();
+export type ConversationOperation = z.infer<typeof ConversationOperationSchema>;
+
+export const ConversationOperationAcceptUserRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+  "user_seq": z.number().int().min(0),
+}).passthrough();
+export type ConversationOperationAcceptUserRequest = z.infer<typeof ConversationOperationAcceptUserRequestSchema>;
+
+export const ConversationOperationBeginOutcomeSchema = z.enum(["acquired", "replay", "in_progress", "conflict"]);
+export type ConversationOperationBeginOutcome = z.infer<typeof ConversationOperationBeginOutcomeSchema>;
+
+export const ConversationOperationBeginRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "request_hash": z.string(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationBeginRequest = z.infer<typeof ConversationOperationBeginRequestSchema>;
+
+export const ConversationOperationClaimSchema = z.object({
+  "assistant_message_id": z.string(),
+  "assistant_seq": z.number().int().min(0).nullable().optional(),
+  "caller_key": z.string(),
+  "conversation_id": z.string(),
+  "error_code": z.string().nullable().optional(),
+  "error_message": z.string().nullable().optional(),
+  "execution_hash": z.string().nullable().optional(),
+  "lease_expires_at": z.number().int(),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+  "recovered": z.boolean().optional(),
+  "status": ConversationOperationStatusSchema,
+  "user_message_id": z.string(),
+  "user_seq": z.number().int().min(0).nullable().optional(),
+}).passthrough();
+export type ConversationOperationClaim = z.infer<typeof ConversationOperationClaimSchema>;
+
+export const ConversationOperationBeginResponseSchema = z.object({
+  "claim": z.union([ConversationOperationClaimSchema, z.null()]).optional(),
+  "operation": z.union([ConversationOperationSchema, z.null()]).optional(),
+  "outcome": ConversationOperationBeginOutcomeSchema,
+}).passthrough();
+export type ConversationOperationBeginResponse = z.infer<typeof ConversationOperationBeginResponseSchema>;
+
+export const ConversationOperationBindExecutionRequestSchema = z.object({
+  "allow_rebind": z.boolean().optional(),
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "execution_hash": z.string(),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationBindExecutionRequest = z.infer<typeof ConversationOperationBindExecutionRequestSchema>;
+
+export const ConversationOperationKeySchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationKey = z.infer<typeof ConversationOperationKeySchema>;
+
+export const ConversationOperationLoadRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationLoadRequest = z.infer<typeof ConversationOperationLoadRequestSchema>;
+
+export const ConversationOperationLoadResponseSchema = z.object({
+  "operation": z.union([ConversationOperationSchema, z.null()]).optional(),
+}).passthrough();
+export type ConversationOperationLoadResponse = z.infer<typeof ConversationOperationLoadResponseSchema>;
+
+export const ConversationOperationMutationResponseSchema = z.object({
+  "changed": z.boolean(),
+  "operation": z.union([ConversationOperationSchema, z.null()]).optional(),
+}).passthrough();
+export type ConversationOperationMutationResponse = z.infer<typeof ConversationOperationMutationResponseSchema>;
+
+export const ConversationOperationReleaseRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationReleaseRequest = z.infer<typeof ConversationOperationReleaseRequestSchema>;
+
+export const ConversationOperationRenewRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationRenewRequest = z.infer<typeof ConversationOperationRenewRequestSchema>;
+
+export const ConversationOperationTerminalizeRequestSchema = z.object({
+  "as_user": z.string().nullable().optional(),
+  "assistant_seq": z.number().int().min(0).nullable().optional(),
+  "caller_key": z.string().min(1).max(128).regex(new RegExp("^[A-Za-z0-9._:-]+$")),
+  "conversation_id": z.string(),
+  "error_code": z.string().nullable().optional(),
+  "error_message": z.string().nullable().optional(),
+  "lease_token": z.string(),
+  "operation_id": z.string(),
+  "project_root": z.string().nullable().optional(),
+  "repo_scope": z.string().nullable().optional(),
+  "status": ConversationOperationStatusSchema,
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
+}).passthrough();
+export type ConversationOperationTerminalizeRequest = z.infer<typeof ConversationOperationTerminalizeRequestSchema>;
+
 export const ConversationSaveMetaRequestSchema = z.object({
   "as_user": z.string().nullable().optional(),
+  "expected_revision": z.number().int().min(0).nullable().optional(),
   "meta": ConversationMetaSchema,
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationSaveMetaRequest = z.infer<typeof ConversationSaveMetaRequestSchema>;
 
@@ -133,6 +310,7 @@ export type ConversationSaveMetaResponse = z.infer<typeof ConversationSaveMetaRe
 export const ConversationScopeSchema = z.object({
   "project_root": z.string().nullable().optional(),
   "repo_scope": z.string().nullable().optional(),
+  "tenant_id": z.string().min(1).max(128).nullable().optional(),
 }).passthrough();
 export type ConversationScope = z.infer<typeof ConversationScopeSchema>;
 

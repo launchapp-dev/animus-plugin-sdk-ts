@@ -1,9 +1,10 @@
 {
   "repository": "https://github.com/launchapp-dev/animus-protocol",
-  "ref": "v0.7.0-rc.43",
-  "commit": "88ee00a922b80fb785424b1f2d3231cb09a57ca7",
+  "ref": "v0.7.0-rc.44",
+  "commit": "6b079720cc5301f2e3eead21dcb9977aada60cb0",
   "crates": [
     "animus-application-protocol",
+    "animus-channel-protocol",
     "animus-config-protocol",
     "animus-durable-store-protocol",
     "animus-environment-protocol",

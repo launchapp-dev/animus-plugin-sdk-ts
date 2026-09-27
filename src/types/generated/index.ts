@@ -2,6 +2,7 @@
 // Regenerate via: pnpm run codegen
 
 export * as application from "./application.js";
+export * as channel from "./channel.js";
 export * as config from "./config.js";
 export * as durableStore from "./durable-store.js";
 export * as environment from "./environment.js";
